@@ -10,7 +10,7 @@ pub mod summarize;
 pub mod transcript;
 
 pub use model::{Harness, Outcome, Session, Summary};
-pub use store::Store;
+pub use store::{MessageHit, Store};
 
 use std::path::PathBuf;
 

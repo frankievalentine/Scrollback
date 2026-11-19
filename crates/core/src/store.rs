@@ -4,9 +4,11 @@
 
 use crate::model::{Harness, Session, Summary};
 use crate::sources::{claude_code, codex, opencode};
+use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -23,6 +25,8 @@ pub struct Report {
     pub unchanged: usize,
     /// Source files that disappeared since the last refresh.
     pub removed: usize,
+    /// Sessions whose message text was (re)indexed for search this time.
+    pub messages_indexed: usize,
     /// Problems that did not stop the refresh, such as an unreadable store.
     pub warnings: Vec<String>,
     pub elapsed: Duration,
@@ -103,6 +107,20 @@ impl Store {
             .exists([])?;
         if !has_summary_time {
             db.execute("alter table sessions add column summary_for_ms integer", [])?;
+        }
+        // Message text, searchable by substring. The trigram tokenizer matches
+        // any run of three or more characters, in any case.
+        db.execute_batch(
+            "create virtual table if not exists messages using fts5(
+                 text, key unindexed, block unindexed, role unindexed,
+                 tokenize = 'trigram'
+             )",
+        )?;
+        let has_messages_time = db
+            .prepare("select 1 from pragma_table_info('sessions') where name = 'messages_for_ms'")?
+            .exists([])?;
+        if !has_messages_time {
+            db.execute("alter table sessions add column messages_for_ms integer", [])?;
         }
         let has_active = db
             .prepare("select 1 from pragma_table_info('sessions') where name = 'active_ms'")?
@@ -272,8 +290,108 @@ impl Store {
         }
         tx.commit()?;
 
+        self.index_messages(&mut report)?;
         report.elapsed = started.elapsed();
         Ok(report)
+    }
+
+    /// Bring the message index up to date: re-read the text of every session
+    /// that has changed since its messages were last indexed.
+    fn index_messages(&mut self, report: &mut Report) -> Result<()> {
+        let stale_keys: HashSet<String> = {
+            let mut stmt = self.db.prepare(
+                "select key from sessions
+                 where parent is null
+                   and (messages_for_ms is null or messages_for_ms != updated_ms)",
+            )?;
+            let keys = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            keys.collect::<rusqlite::Result<_>>()?
+        };
+        let stale: Vec<Session> = if stale_keys.is_empty() {
+            Vec::new()
+        } else {
+            self.sessions(false)?
+                .into_iter()
+                .filter(|s| stale_keys.contains(&s.key()))
+                .collect()
+        };
+
+        let read = read_all_messages(&stale);
+        let tx = self.db.transaction()?;
+        {
+            let mut clear = tx.prepare("delete from messages where key = ?1")?;
+            let mut add =
+                tx.prepare("insert into messages (text, key, block, role) values (?1, ?2, ?3, ?4)")?;
+            let mut done =
+                tx.prepare("update sessions set messages_for_ms = updated_ms where key = ?1")?;
+            for (i, outcome) in read {
+                let session = &stale[i];
+                let key = session.key();
+                match outcome {
+                    Ok(texts) => {
+                        clear.execute([&key])?;
+                        for (block, role, text) in texts {
+                            add.execute(params![text, key, block as i64, role])?;
+                        }
+                        done.execute([&key])?;
+                        report.messages_indexed += 1;
+                    }
+                    Err(err) => report
+                        .warnings
+                        .push(format!("{}: {err:#}", session.display_title())),
+                }
+            }
+            // Messages of sessions that no longer exist.
+            tx.execute(
+                "delete from messages where key not in (select key from sessions)",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Messages containing every word of `query` (words of three or more
+    /// characters; shorter ones are ignored), best matches first.
+    pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageHit>> {
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .filter(|term| term.chars().count() >= 3)
+            .map(str::to_lowercase)
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let expression = terms
+            .iter()
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let mut stmt = self.db.prepare(
+            "select key, block, role, text from messages
+             where messages match ?1 order by rank limit ?2",
+        )?;
+        let rows = stmt.query_map(params![expression, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut hits = Vec::new();
+        for row in rows {
+            let (key, block, role, text) = row?;
+            let (snippet, matches) = snippet(&text, &terms);
+            hits.push(MessageHit {
+                key,
+                block: block as usize,
+                from_user: role == "you",
+                snippet,
+                matches,
+            });
+        }
+        Ok(hits)
     }
 
     fn stamps(&self) -> Result<HashMap<String, Stamp>> {
@@ -289,6 +407,140 @@ impl Store {
         })?;
         Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
     }
+}
+
+/// One message that matched a search.
+pub struct MessageHit {
+    /// The key of the session it belongs to.
+    pub key: String,
+    /// Its position among the session's transcript blocks.
+    pub block: usize,
+    pub from_user: bool,
+    /// A short stretch of the message around the first match.
+    pub snippet: String,
+    /// Byte ranges in `snippet` that matched the query.
+    pub matches: Vec<Range<usize>>,
+}
+
+/// Cut a window of `text` around the first match of any term, and report
+/// where the terms appear inside it.
+fn snippet(text: &str, terms: &[String]) -> (String, Vec<Range<usize>>) {
+    const BEFORE: usize = 60;
+    const LENGTH: usize = 220;
+    // Work in characters, with whitespace flattened one-for-one so positions
+    // in the lowercased copy line up with the original.
+    let chars: Vec<char> = text
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect();
+    let lower: Vec<char> = chars
+        .iter()
+        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .collect();
+    let terms: Vec<Vec<char>> = terms.iter().map(|t| t.chars().collect()).collect();
+    let find_all = |from: usize, to: usize| -> Vec<Range<usize>> {
+        let mut found = Vec::new();
+        for term in &terms {
+            if term.is_empty() || term.len() > to.saturating_sub(from) {
+                continue;
+            }
+            let mut i = from;
+            while i + term.len() <= to {
+                if lower[i..i + term.len()] == term[..] {
+                    found.push(i..i + term.len());
+                    i += term.len();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        found.sort_by_key(|r| r.start);
+        found
+    };
+
+    let first = find_all(0, chars.len()).first().map_or(0, |r| r.start);
+    let mut start = first.saturating_sub(BEFORE);
+    // Begin on a word boundary when there is one nearby.
+    if start > 0 {
+        if let Some(space) = chars[start..first].iter().position(|c| *c == ' ') {
+            start += space + 1;
+        }
+    }
+    let end = (start + LENGTH).min(chars.len());
+
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    let found = find_all(start, end);
+    let mut next = found.iter().peekable();
+    let mut open: Option<usize> = None;
+    for (i, ch) in chars[start..end].iter().enumerate() {
+        let at = start + i;
+        while next.peek().is_some_and(|r| r.end <= at) {
+            next.next();
+        }
+        let inside = next.peek().is_some_and(|r| r.start <= at && at < r.end);
+        match (inside, open) {
+            (true, None) => open = Some(out.len()),
+            (false, Some(began)) => {
+                ranges.push(began..out.len());
+                open = None;
+            }
+            _ => {}
+        }
+        out.push(*ch);
+    }
+    if let Some(began) = open {
+        ranges.push(began..out.len());
+    }
+    if end < chars.len() {
+        out.push('…');
+    }
+    (out, ranges)
+}
+
+type MessageText = (usize, &'static str, String);
+
+/// Read the prompts and replies of each session, across all cores. Returns
+/// the session's position in `sessions` with its texts.
+fn read_all_messages(sessions: &[Session]) -> Vec<(usize, Result<Vec<MessageText>>)> {
+    const LIMIT: usize = 20_000;
+    if sessions.is_empty() {
+        return Vec::new();
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(sessions.len());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let out = std::sync::Mutex::new(Vec::with_capacity(sessions.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(session) = sessions.get(i) else { break };
+                let texts = transcript::events(session).map(|events| {
+                    transcript::blocks(events)
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(block, content)| match content {
+                            Block::Prompt(text) => Some((block, "you", text)),
+                            Block::Reply(text) => Some((block, "agent", text)),
+                            _ => None,
+                        })
+                        .map(|(block, role, text)| {
+                            let capped: String = text.chars().take(LIMIT).collect();
+                            (block, role, capped)
+                        })
+                        .collect()
+                });
+                out.lock().unwrap().push((i, texts));
+            });
+        }
+    });
+    out.into_inner().unwrap()
 }
 
 type Parsed = (PathBuf, Stamp, Result<Option<Session>>);

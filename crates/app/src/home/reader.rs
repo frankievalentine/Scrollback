@@ -4,8 +4,8 @@
 use super::{facts, outcome_mark, Home};
 use crate::theme::{Theme, MONO_FONT};
 use gpui::{
-    div, list, prelude::*, px, AnyElement, Context, Div, FontWeight, ListAlignment, ListState,
-    Window,
+    div, list, prelude::*, px, AnyElement, Context, Div, FontWeight, ListAlignment, ListOffset,
+    ListState, Window,
 };
 use scrollback_core::transcript::{self, Block};
 use std::collections::HashSet;
@@ -16,6 +16,8 @@ pub(super) struct Reading {
     /// `None` while the session is being read from disk.
     blocks: Option<Vec<Block>>,
     error: Option<String>,
+    /// The block a search result pointed at; shown first and marked.
+    focus: Option<usize>,
     /// Tool blocks the reader has opened.
     expanded: HashSet<usize>,
     list: ListState,
@@ -28,13 +30,15 @@ fn read_blocks(session: &scrollback_core::Session) -> anyhow::Result<Vec<Block>>
 impl Home {
     /// Open the selected session's transcript, reading it in the background.
     pub(super) fn open_transcript(&mut self, cx: &mut Context<Self>) {
-        let Some(hit) = self.selected else { return };
-        let index = self.hits[hit].index;
+        let Some(index) = self.selected_session() else {
+            return;
+        };
         let session = self.sessions[index].clone();
         self.reading = Some(Reading {
             index,
             blocks: None,
             error: None,
+            focus: self.selected_message().map(|hit| hit.block),
             expanded: HashSet::new(),
             // Row 0 is the header, row 1 the loading line.
             list: ListState::new(2, ListAlignment::Top, px(1200.)),
@@ -55,13 +59,15 @@ impl Home {
     /// Open the transcript and read it before returning. Used only by the
     /// development launch option, so the first frame already shows it.
     pub(super) fn open_transcript_now(&mut self, cx: &mut Context<Self>) {
-        let Some(hit) = self.selected else { return };
-        let index = self.hits[hit].index;
+        let Some(index) = self.selected_session() else {
+            return;
+        };
         let result = read_blocks(&self.sessions[index]);
         self.reading = Some(Reading {
             index,
             blocks: None,
             error: None,
+            focus: self.selected_message().map(|hit| hit.block),
             expanded: HashSet::new(),
             list: ListState::new(2, ListAlignment::Top, px(1200.)),
         });
@@ -81,6 +87,14 @@ impl Home {
         match result {
             Ok(blocks) => {
                 reading.list.reset(blocks.len() + 1);
+                // Start at the message a search result pointed to. Row 0 is
+                // the header, so block n is row n + 1.
+                if let Some(block) = reading.focus.filter(|block| *block < blocks.len()) {
+                    reading.list.scroll_to(ListOffset {
+                        item_ix: block + 1,
+                        offset_in_item: px(0.),
+                    });
+                }
                 reading.blocks = Some(blocks);
             }
             Err(err) => reading.error = Some(format!("{err:#}")),
@@ -300,6 +314,16 @@ impl Home {
                 turn("tools", column, &t).into_any_element()
             }
         };
+        if reading.focus == Some(ix - 1) {
+            // The message the search led here for.
+            return centered(
+                div()
+                    .rounded(px(10.))
+                    .bg(t.accent.opacity(0.12))
+                    .child(body),
+            )
+            .into_any_element();
+        }
         centered(body).into_any_element()
     }
 }

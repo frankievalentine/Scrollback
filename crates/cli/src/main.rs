@@ -74,8 +74,9 @@ fn index() -> Result<()> {
     let mut store = Store::open()?;
     let report = store.refresh()?;
     println!(
-        "Read {} changed files, skipped {} unchanged, dropped {} removed, in {:.0?}.",
-        report.parsed, report.unchanged, report.removed, report.elapsed
+        "Read {} changed files, skipped {} unchanged, dropped {} removed, \
+         indexed messages of {} sessions, in {:.0?}.",
+        report.parsed, report.unchanged, report.removed, report.messages_indexed, report.elapsed
     );
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
@@ -108,6 +109,26 @@ fn search(query: &str, limit: usize) -> Result<()> {
         sessions.len(),
         elapsed
     );
+
+    let started = Instant::now();
+    let messages = Store::open()?.search_messages(query, limit)?;
+    let elapsed = started.elapsed();
+    if !messages.is_empty() {
+        println!("\nIn messages ({:.1?}):", elapsed);
+    }
+    for hit in &messages {
+        let title = sessions
+            .iter()
+            .find(|s| s.key() == hit.key)
+            .map(|s| s.display_title())
+            .unwrap_or("");
+        println!(
+            "  {:<5} {}\n        in {}",
+            if hit.from_user { "you" } else { "agent" },
+            scrollback_core::squash(&hit.snippet, 150),
+            scrollback_core::squash(title, 70)
+        );
+    }
     Ok(())
 }
 

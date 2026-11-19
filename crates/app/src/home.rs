@@ -12,7 +12,7 @@ use gpui::{
     StyledText, Window,
 };
 use scrollback_core::search::{Hit, Searcher};
-use scrollback_core::{summarize, Harness, Outcome, Session, Store, Summary};
+use scrollback_core::{summarize, Harness, MessageHit, Outcome, Session, Store, Summary};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -40,16 +40,28 @@ enum Row {
     Header(SharedString),
     /// An index into `Home::hits`.
     Session(usize),
+    /// An index into `Home::message_hits`.
+    Message(usize),
 }
 
 pub struct Home {
     sessions: Vec<Session>,
     hits: Vec<Hit>,
+    /// Messages matching the query. A selection index past the end of `hits`
+    /// refers into this list.
+    message_hits: Vec<MessageHit>,
+    /// Session key to index in `sessions`.
+    by_key: HashMap<String, usize>,
+    /// The index database, for message search.
+    store: Option<Store>,
     rows: Vec<Row>,
     query: String,
     harness: Option<Harness>,
     project: Option<String>,
     selected: Option<usize>,
+    /// While searching, results stay compact so more of them fit; this is
+    /// set when the selected one has been opened into its full card.
+    expanded: bool,
     copied: Option<usize>,
     /// The transcript being read, when the reader is open.
     reading: Option<Reading>,
@@ -74,11 +86,15 @@ impl Home {
         let mut home = Home {
             sessions,
             hits: Vec::new(),
+            message_hits: Vec::new(),
+            by_key: HashMap::new(),
+            store: Store::open().ok(),
             rows: Vec::new(),
             query,
             harness: None,
             project: None,
             selected: None,
+            expanded: false,
             copied: None,
             reading: None,
             busy: HashSet::new(),
@@ -96,7 +112,11 @@ impl Home {
             home.summarize_selected(cx);
         }
         // Development aid: open straight into the selected session's transcript.
-        if std::env::var_os("SCROLLBACK_DEV_READ").is_some() {
+        // `SCROLLBACK_DEV_READ=message` opens the first message result instead.
+        if let Ok(what) = std::env::var("SCROLLBACK_DEV_READ") {
+            if what == "message" && !home.message_hits.is_empty() {
+                home.selected = Some(home.hits.len());
+            }
             home.open_transcript_now(cx);
         }
         home
@@ -114,12 +134,39 @@ impl Home {
                     .as_deref()
                     .is_none_or(|p| session.project() == p)
         });
-        self.search_time = started.elapsed();
         self.hits = hits;
 
-        self.rows.clear();
+        self.by_key = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(i, session)| (session.key(), i))
+            .collect();
         let grouped_by_day = self.query.trim().is_empty();
+        let mut message_hits = match &self.store {
+            Some(store) if !grouped_by_day => {
+                store.search_messages(&self.query, 40).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        message_hits.retain(|hit| {
+            self.by_key.get(&hit.key).is_some_and(|&i| {
+                let session = &self.sessions[i];
+                self.harness.is_none_or(|h| session.harness == h)
+                    && self
+                        .project
+                        .as_deref()
+                        .is_none_or(|p| session.project() == p)
+            })
+        });
+        self.message_hits = message_hits;
+        self.search_time = started.elapsed();
+
+        self.rows.clear();
         let mut last_day = String::new();
+        if !grouped_by_day && !self.hits.is_empty() {
+            self.rows.push(Row::Header("SESSIONS".into()));
+        }
         for (i, hit) in self.hits.iter().enumerate() {
             if grouped_by_day {
                 let day = day_label(self.sessions[hit.index].updated_ms);
@@ -130,21 +177,59 @@ impl Home {
             }
             self.rows.push(Row::Session(i));
         }
-        self.selected = (!self.hits.is_empty()).then_some(0);
+        if !self.message_hits.is_empty() {
+            self.rows.push(Row::Header("IN MESSAGES".into()));
+            self.rows
+                .extend((0..self.message_hits.len()).map(Row::Message));
+        }
+        self.selected = (self.selectable() > 0).then_some(0);
+        self.expanded = false;
         self.copied = None;
         self.list.reset(self.rows.len());
     }
 
-    fn row_of(&self, hit: usize) -> Option<usize> {
-        self.rows
-            .iter()
-            .position(|row| matches!(row, Row::Session(h) if *h == hit))
+    /// How many rows can be selected: session results, then message results.
+    fn selectable(&self) -> usize {
+        self.hits.len() + self.message_hits.len()
+    }
+
+    /// The row showing selection index `selection`.
+    fn row_of(&self, selection: usize) -> Option<usize> {
+        let sessions = self.hits.len();
+        self.rows.iter().position(|row| match row {
+            Row::Session(hit) => *hit == selection,
+            Row::Message(hit) => *hit + sessions == selection,
+            Row::Header(_) => false,
+        })
+    }
+
+    /// The message result that is selected, if the selection is on one.
+    fn selected_message(&self) -> Option<&MessageHit> {
+        self.selected
+            .and_then(|selection| selection.checked_sub(self.hits.len()))
+            .and_then(|i| self.message_hits.get(i))
+    }
+
+    /// The session the selection belongs to, as an index into `sessions`.
+    fn selected_session(&self) -> Option<usize> {
+        let selection = self.selected?;
+        match self.hits.get(selection) {
+            Some(hit) => Some(hit.index),
+            None => self
+                .selected_message()
+                .and_then(|hit| self.by_key.get(&hit.key).copied()),
+        }
     }
 
     fn select(&mut self, hit: usize, cx: &mut Context<Self>) {
         if self.selected == Some(hit) {
+            // A second click on a search result opens or closes its card.
+            if !self.query.trim().is_empty() {
+                self.toggle_expanded(cx);
+            }
             return;
         }
+        self.expanded = false;
         // Both rows change height, so the list has to measure them again.
         for changed in [self.selected, Some(hit)].into_iter().flatten() {
             if let Some(row) = self.row_of(changed) {
@@ -159,20 +244,32 @@ impl Home {
         cx.notify();
     }
 
+    fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.selected else { return };
+        self.expanded = !self.expanded;
+        if let Some(row) = self.row_of(selection) {
+            self.list.splice(row..row + 1, 1);
+            self.list.scroll_to_reveal_item(row);
+        }
+        cx.notify();
+    }
+
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.hits.is_empty() {
+        if self.selectable() == 0 {
             return;
         }
         let current = self.selected.unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, self.hits.len() as isize - 1) as usize;
+        let next = (current + delta).clamp(0, self.selectable() as isize - 1) as usize;
         self.select(next, cx);
     }
 
     fn copy_resume(&mut self, cx: &mut Context<Self>) {
-        let Some(hit) = self.selected else { return };
-        let session = &self.sessions[self.hits[hit].index];
+        let Some(index) = self.selected_session() else {
+            return;
+        };
+        let session = &self.sessions[index];
         cx.write_to_clipboard(ClipboardItem::new_string(resume_command(session)));
-        self.copied = Some(hit);
+        self.copied = self.selected;
         cx.notify();
     }
 
@@ -200,8 +297,11 @@ impl Home {
         }
         match keystroke.key.as_str() {
             "right" => self.open_transcript(cx),
+            "tab" => self.toggle_expanded(cx),
             "down" => self.move_selection(1, cx),
             "up" => self.move_selection(-1, cx),
+            // On a message result, enter goes to that message.
+            "enter" if self.selected_message().is_some() => self.open_transcript(cx),
             "enter" => self.copy_resume(cx),
             "q" if mods.platform => cx.quit(),
             "w" if mods.platform => window.remove_window(),
@@ -337,7 +437,12 @@ impl Home {
                 .child("Type to search sessions, projects and prompts")
         };
         let hint = if searching {
-            format!("{} matches · {:.1?}", self.hits.len(), self.search_time)
+            format!(
+                "{} sessions · {} messages · {:.1?}   tab expand",
+                self.hits.len(),
+                self.message_hits.len(),
+                self.search_time
+            )
         } else {
             "↑↓ move   → read   ↵ copy resume   ⌘S summarise   ⌘R reindex".to_string()
         };
@@ -380,9 +485,12 @@ impl Home {
                 .pb(px(8.))
                 .child(label(text.clone(), &t))
                 .into_any_element(),
+            Some(Row::Message(hit)) => self.message_row(*hit, ix, &t, cx).into_any_element(),
             Some(Row::Session(hit)) => {
                 let hit = *hit;
-                if self.selected == Some(hit) {
+                let as_card = self.selected == Some(hit)
+                    && (self.query.trim().is_empty() || self.expanded);
+                if as_card {
                     self.card(hit, &t, cx).into_any_element()
                 } else {
                     self.compact(hit, ix, &t, cx).into_any_element()
@@ -399,8 +507,10 @@ impl Home {
 
     /// Write (or rewrite) the selected session's summary in the background.
     fn summarize_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(hit) = self.selected else { return };
-        let session = self.sessions[self.hits[hit].index].clone();
+        let Some(index) = self.selected_session() else {
+            return;
+        };
+        let session = self.sessions[index].clone();
         let key = session.key();
         if !self.busy.insert(key.clone()) {
             return;
@@ -447,6 +557,79 @@ impl Home {
         cx.notify();
     }
 
+    /// One message that matched the search: who said it, the text around the
+    /// match, and which session it is in. Opens the transcript at that message.
+    fn message_row(&self, i: usize, ix: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let hit = &self.message_hits[i];
+        let selection = self.hits.len() + i;
+        let selected = self.selected == Some(selection);
+        let fill = t.fill;
+        let highlight = HighlightStyle {
+            color: Some(t.accent),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        };
+        let text = StyledText::new(SharedString::from(hit.snippet.clone()))
+            .with_highlights(hit.matches.iter().cloned().map(|range| (range, highlight)));
+
+        let mut origin = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(12.))
+            .text_color(t.ink3);
+        if let Some(session) = self.by_key.get(&hit.key).map(|&i| &self.sessions[i]) {
+            origin = origin
+                .child(logo(session.harness, t, 12.))
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .child(format!("in {}", session.display_title())),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .child(day_label(session.updated_ms).to_lowercase()),
+                );
+        }
+
+        div()
+            .id(("message", ix))
+            .flex()
+            .gap(px(20.))
+            .px(px(20.))
+            .py(px(10.))
+            .rounded(px(10.))
+            .cursor_pointer()
+            .when(selected, |el| el.bg(fill))
+            .hover(move |style| style.bg(fill))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select(selection, cx);
+                this.open_transcript(cx);
+            }))
+            .child(
+                div()
+                    .w(px(44.))
+                    .flex_shrink_0()
+                    .pt(px(2.))
+                    .font_family(MONO_FONT)
+                    .text_size(px(11.))
+                    .text_color(t.ink3)
+                    .child(if hit.from_user { "you" } else { "agent" }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(div().text_color(t.ink2).line_clamp(3).child(text))
+                    .child(origin),
+            )
+    }
+
     /// One unselected session: time, title, a line or two about it, and facts.
     fn compact(&self, hit: usize, ix: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let found = &self.hits[hit];
@@ -456,6 +639,8 @@ impl Home {
             None if session.first_prompt != session.title => session.first_prompt.clone(),
             None => String::new(),
         };
+        let selected = self.selected == Some(hit);
+        let fill = t.fill;
         div()
             .id(("session", ix))
             .flex()
@@ -463,6 +648,7 @@ impl Home {
             .px(px(20.))
             .py(px(14.))
             .rounded(px(10.))
+            .when(selected, |el| el.bg(fill))
             .cursor_pointer()
             .hover(|style| style.bg(t.fill.opacity(0.5)))
             .on_click(cx.listener(move |this, _, _, cx| this.select(hit, cx)))

@@ -1,6 +1,6 @@
 //! Fuzzy search over the short strings of each session: title, project,
-//! branch, first prompt and summary. Queries use fzf-style syntax, so `tokn rfrsh`
-//! matches "token refresh" and each word must match somewhere.
+//! branch, first prompt and summary. Titles match fuzzily, so `tokn rfrsh` finds
+//! "token refresh"; elsewhere each word of the query must appear intact.
 
 use crate::model::Session;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -50,6 +50,14 @@ impl Searcher {
                 .collect();
         }
         let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+        // Outside the title the text is long enough that scattered letters
+        // match almost anything, so each word must appear intact there.
+        let exact_words = query
+            .split_whitespace()
+            .map(|word| format!("'{}", word.trim_start_matches(['\'', '^', '!'])))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let exact = Pattern::parse(&exact_words, CaseMatching::Ignore, Normalization::Smart);
 
         let mut hits = Vec::new();
         let mut rest = String::new();
@@ -82,10 +90,10 @@ impl Searcher {
                 rest.push_str(&summary.summary);
             }
             let haystack = Utf32Str::new(&rest, &mut self.chars);
-            if let Some(score) = pattern.score(haystack, &mut self.matcher) {
+            if exact.score(haystack, &mut self.matcher).is_some() {
                 hits.push(Hit {
                     index,
-                    score,
+                    score: 1,
                     title_matches: Vec::new(),
                 });
             }
