@@ -17,7 +17,9 @@ Usage:
   scrollback summarize [-n N]      Write summaries for the N most recent sessions
                                    that lack one (default 5). --active includes
                                    sessions used in the last 10 minutes;
-                                   --redo rewrites summaries that already exist
+                                   --redo rewrites summaries that already exist;
+                                   --ungrouped rewrites those written before
+                                   steps were tied to the transcript
   scrollback summarize <query>     Write or rewrite the summary of the best match
   scrollback show <query>          Print the summary of the best match
   scrollback preview <query>       Print exactly what `summarize` would send
@@ -36,6 +38,7 @@ fn main() -> Result<()> {
     let all = take_flag(&mut args, "--all");
     let active = take_flag(&mut args, "--active");
     let redo = take_flag(&mut args, "--redo");
+    let ungrouped = take_flag(&mut args, "--ungrouped");
 
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
@@ -55,7 +58,7 @@ fn main() -> Result<()> {
             Store::open()?.set_summary(&session, &written.summary)?;
             show(&args[1..].join(" "))
         }
-        "summarize" => summarize_pending(limit.unwrap_or(5), active, redo),
+        "summarize" => summarize_pending(limit.unwrap_or(5), active, redo, ungrouped),
         "show" => show(&args[1..].join(" ")),
         "preview" => {
             let session = best_match(&args[1..].join(" "))?;
@@ -194,13 +197,16 @@ fn show(query: &str) -> Result<()> {
     Ok(())
 }
 
-fn summarize_pending(limit: usize, include_active: bool, redo: bool) -> Result<()> {
+fn summarize_pending(limit: usize, include_active: bool, redo: bool, ungrouped: bool) -> Result<()> {
     let store = Store::open()?;
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
     let pending: Vec<Session> = store
         .sessions(false)?
         .into_iter()
-        .filter(|s| redo || s.summary.is_none() || s.summary_stale)
+        .filter(|s| {
+            let lacks_steps = s.summary.as_ref().is_some_and(|sum| sum.step_starts.is_empty());
+            redo || s.summary.is_none() || s.summary_stale || (ungrouped && lacks_steps)
+        })
         .filter(|s| include_active || now_ms - s.updated_ms > 10 * 60 * 1000)
         .take(limit)
         .collect();
