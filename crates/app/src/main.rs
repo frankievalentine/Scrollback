@@ -26,6 +26,10 @@ impl AssetSource for Assets {
             "view-activity.svg" => Some(include_bytes!("../assets/view-activity.svg")),
             "check.svg" => Some(include_bytes!("../assets/check.svg")),
             "mark.svg" => Some(include_bytes!("../assets/mark.svg")),
+            "claude.svg" => Some(include_bytes!("../assets/claude.svg")),
+            "openai.svg" => Some(include_bytes!("../assets/openai.svg")),
+            "cursor.svg" => Some(include_bytes!("../assets/cursor.svg")),
+            "t3.svg" => Some(include_bytes!("../assets/t3.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -64,6 +68,7 @@ fn main() {
             },
             |window, cx| {
                 let view = cx.new(|cx| Home::new(sessions, status, query, cx));
+                view.update(cx, |home, cx| home.watch_window(window, cx));
                 window.focus(&view.read(cx).focus);
                 view
             },

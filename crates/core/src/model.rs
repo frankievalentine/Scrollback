@@ -54,14 +54,16 @@ pub enum Harness {
     Codex,
     OpenCode,
     Pi,
+    Cursor,
 }
 
 impl Harness {
-    pub const ALL: [Harness; 4] = [
+    pub const ALL: [Harness; 5] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::OpenCode,
         Harness::Pi,
+        Harness::Cursor,
     ];
 
     /// Stable identifier used in the index and in session keys.
@@ -71,6 +73,7 @@ impl Harness {
             Harness::Codex => "codex",
             Harness::OpenCode => "opencode",
             Harness::Pi => "pi",
+            Harness::Cursor => "cursor",
         }
     }
 
@@ -80,11 +83,85 @@ impl Harness {
             Harness::Codex => "Codex",
             Harness::OpenCode => "OpenCode",
             Harness::Pi => "pi",
+            Harness::Cursor => "Cursor",
         }
     }
 
     pub fn from_slug(slug: &str) -> Option<Harness> {
         Harness::ALL.into_iter().find(|h| h.slug() == slug)
+    }
+
+    /// Where a session of this harness comes from unless something says
+    /// otherwise: the harness's own command-line tool or app.
+    pub fn origin(self) -> Origin {
+        match self {
+            Harness::ClaudeCode => Origin::ClaudeCode,
+            Harness::Codex => Origin::Codex,
+            Harness::OpenCode => Origin::OpenCode,
+            Harness::Pi => Origin::Pi,
+            Harness::Cursor => Origin::Cursor,
+        }
+    }
+}
+
+/// Where a session was run from, as the sidebar lists it. A harness says how
+/// a session is stored and read; an origin says which program the user was
+/// sitting in. Claude Code and Codex each have a desktop app that writes the
+/// same files as the command-line tool, and T3 Code drives other harnesses,
+/// so one harness can have several origins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Origin {
+    ClaudeCode,
+    ClaudeDesktop,
+    Codex,
+    CodexDesktop,
+    OpenCode,
+    Pi,
+    Cursor,
+    T3Code,
+}
+
+impl Origin {
+    pub const ALL: [Origin; 8] = [
+        Origin::ClaudeCode,
+        Origin::ClaudeDesktop,
+        Origin::Codex,
+        Origin::CodexDesktop,
+        Origin::OpenCode,
+        Origin::Pi,
+        Origin::Cursor,
+        Origin::T3Code,
+    ];
+
+    /// Stable identifier used in the index.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Origin::ClaudeCode => "claude-code",
+            Origin::ClaudeDesktop => "claude-desktop",
+            Origin::Codex => "codex",
+            Origin::CodexDesktop => "codex-desktop",
+            Origin::OpenCode => "opencode",
+            Origin::Pi => "pi",
+            Origin::Cursor => "cursor",
+            Origin::T3Code => "t3-code",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Origin::ClaudeCode => "Claude Code",
+            Origin::ClaudeDesktop => "Claude desktop",
+            Origin::Codex => "Codex",
+            Origin::CodexDesktop => "Codex desktop",
+            Origin::OpenCode => "OpenCode",
+            Origin::Pi => "pi",
+            Origin::Cursor => "Cursor",
+            Origin::T3Code => "T3 Code",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Origin> {
+        Origin::ALL.into_iter().find(|o| o.slug() == slug)
     }
 }
 
@@ -93,6 +170,8 @@ impl Harness {
 #[derive(Debug, Clone)]
 pub struct Session {
     pub harness: Harness,
+    /// The program the session was run from.
+    pub origin: Origin,
     /// The harness's own session id.
     pub id: String,
     /// A harness-provided title when there is one, otherwise the first prompt.
@@ -131,6 +210,7 @@ impl Session {
     pub fn new(harness: Harness, id: impl Into<String>, source: impl Into<String>) -> Session {
         Session {
             harness,
+            origin: harness.origin(),
             id: id.into(),
             title: String::new(),
             first_prompt: String::new(),

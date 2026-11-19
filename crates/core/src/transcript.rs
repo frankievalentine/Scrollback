@@ -39,6 +39,7 @@ pub fn events(session: &Session) -> Result<Vec<Event>> {
         Harness::Codex => codex(session),
         Harness::OpenCode => opencode(session),
         Harness::Pi => crate::sources::pi::events(session),
+        Harness::Cursor => crate::sources::cursor::events(session),
     }
 }
 
@@ -377,7 +378,7 @@ pub fn tools_line(calls: &[Call]) -> String {
 /// True for tools that change files, whatever the harness calls them.
 fn edits_files(tool: &str) -> bool {
     let tool = tool.to_ascii_lowercase();
-    ["edit", "write", "patch"].iter().any(|word| tool.contains(word))
+    ["edit", "write", "patch", "replace"].iter().any(|word| tool.contains(word))
 }
 
 /// Project files the session's edit tools were aimed at, relative to the

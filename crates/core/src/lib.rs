@@ -13,7 +13,7 @@ pub mod transcript;
 
 pub use activity::Activity;
 pub use config::Config;
-pub use model::{Harness, Outcome, Session, Summary};
+pub use model::{Harness, Origin, Outcome, Session, Summary};
 pub use store::{Digest, MessageHit, Store};
 
 use std::path::PathBuf;
@@ -23,9 +23,13 @@ pub fn home() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
 }
 
-/// Where scrollback keeps its own index.
+/// Where scrollback keeps its own index. `SCROLLBACK_DATA_DIR` points it
+/// somewhere else, so a change can be tried against a copy of the index.
 pub fn data_dir() -> PathBuf {
-    home().join("Library/Application Support/scrollback")
+    std::env::var_os("SCROLLBACK_DATA_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join("Library/Application Support/scrollback"))
 }
 
 /// Collapse whitespace and cut `text` to at most `max` characters.

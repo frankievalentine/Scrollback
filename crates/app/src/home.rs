@@ -15,7 +15,8 @@ use gpui::{
 };
 use scrollback_core::search::{Hit, Searcher};
 use scrollback_core::{
-    summarize, Activity, Config, Digest, Harness, MessageHit, Outcome, Session, Store, Summary,
+    summarize, Activity, Config, Digest, Harness, MessageHit, Origin, Outcome, Session, Store,
+    Summary,
 };
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -28,6 +29,8 @@ const QUIET_BEFORE_SUMMARY_MS: i64 = 10 * 60 * 1000;
 const REFRESH_EVERY: Duration = Duration::from_secs(60);
 /// How many summaries are written at once.
 const SUMMARIES_AT_ONCE: usize = 2;
+/// Half a blink of the search caret.
+const CARET_BLINK: Duration = Duration::from_millis(530);
 /// How long to hold off after the Claude plan limit is reported.
 const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 
@@ -77,13 +80,20 @@ pub struct Home {
     store: Option<Store>,
     rows: Vec<Row>,
     query: String,
-    harness: Option<Harness>,
+    /// The source the sidebar is filtering to.
+    origin: Option<Origin>,
     project: Option<String>,
     selected: Option<usize>,
     /// While searching, results stay compact so more of them fit; this is
     /// set when the selected one has been opened into its full card.
     expanded: bool,
     copied: Option<usize>,
+    /// Whether the search caret is in the lit half of its blink.
+    caret_lit: bool,
+    /// When a key last changed the search, so the caret stays lit while typing.
+    typed_at: Instant,
+    /// Whether this is the window the keyboard is going to.
+    window_active: bool,
     /// Showing the first-run screen, which holds everything else back.
     first_run: bool,
     /// Whether the `claude` command, which writes summaries, is installed.
@@ -143,11 +153,14 @@ impl Home {
             store: Store::open().ok(),
             rows: Vec::new(),
             query,
-            harness: None,
+            origin: None,
             project: None,
             selected: None,
             expanded: false,
             copied: None,
+            caret_lit: true,
+            typed_at: Instant::now(),
+            window_active: true,
             first_run,
             claude_found,
             view: View::Sessions,
@@ -173,6 +186,26 @@ impl Home {
         }
         home.recompute();
         home.pump_summaries(cx);
+
+        // Blink the search caret, but only while it is on screen in the
+        // window being typed into, so an idle window draws nothing.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(CARET_BLINK).await;
+            let alive = this.update(cx, |this, cx| {
+                let showing = this.window_active
+                    && !this.first_run
+                    && this.reading.is_none()
+                    && this.view == View::Sessions;
+                if showing {
+                    this.caret_lit = !this.caret_lit;
+                    cx.notify();
+                }
+            });
+            if alive.is_err() {
+                break;
+            }
+        })
+        .detach();
 
         // Look for new and changed sessions for as long as the window lives.
         cx.spawn(async move |this, cx| loop {
@@ -210,6 +243,18 @@ impl Home {
         home
     }
 
+    /// Follow whether the window has the keyboard, so the caret only blinks
+    /// in the window that typing goes to.
+    pub fn watch_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.window_active = window.is_window_active();
+        cx.observe_window_activation(window, |this, window, cx| {
+            this.window_active = window.is_window_active();
+            this.caret_lit = true;
+            cx.notify();
+        })
+        .detach();
+    }
+
     /// What the view is showing, for the development key-press log.
     pub fn dev_state(&self) -> String {
         format!(
@@ -230,7 +275,7 @@ impl Home {
         let mut hits = self.searcher.search(&self.query, &self.sessions);
         hits.retain(|hit| {
             let session = &self.sessions[hit.index];
-            self.harness.is_none_or(|h| session.harness == h)
+            self.origin.is_none_or(|o| session.origin == o)
                 && self
                     .project
                     .as_deref()
@@ -254,7 +299,7 @@ impl Home {
         message_hits.retain(|hit| {
             self.by_key.get(&hit.key).is_some_and(|&i| {
                 let session = &self.sessions[i];
-                self.harness.is_none_or(|h| session.harness == h)
+                self.origin.is_none_or(|o| session.origin == o)
                     && self
                         .project
                         .as_deref()
@@ -496,6 +541,7 @@ impl Home {
             );
         if ours {
             cx.stop_propagation();
+            self.typed_at = Instant::now();
         }
         if self.first_run {
             self.first_run_key(event, window, cx);
@@ -557,7 +603,7 @@ impl Home {
             "2" if mods.platform => self.show_activity(cx),
             "escape" => {
                 if self.query.is_empty() {
-                    self.harness = None;
+                    self.origin = None;
                     self.project = None;
                 } else {
                     self.query.clear();
@@ -620,21 +666,26 @@ impl Home {
                     .child("Activity"),
             );
 
-        let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Harness", t)));
-        for harness in Harness::ALL {
-            let count = self.sessions.iter().filter(|s| s.harness == harness).count();
-            let active = self.harness == Some(harness);
+        // One row for each program sessions were run from. Only those with
+        // sessions are listed, so the list stays short as more are supported.
+        let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Source", t)));
+        for origin in Origin::ALL {
+            let count = self.sessions.iter().filter(|s| s.origin == origin).count();
+            let active = self.origin == Some(origin);
+            if count == 0 && !active {
+                continue;
+            }
             harnesses = harnesses.child(
                 nav_row(t, active)
-                    .id(harness.slug())
+                    .id(origin.slug())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.harness = (this.harness != Some(harness)).then_some(harness);
+                        this.origin = (this.origin != Some(origin)).then_some(origin);
                         this.recompute();
                         this.pump_digest(cx);
                         cx.notify();
                     }))
-                    .child(logo(harness, t, 16.))
-                    .child(div().flex_1().child(harness.name()))
+                    .child(logo(origin, t, 16.))
+                    .child(div().flex_1().min_w(px(0.)).truncate().child(origin.name()))
                     .child(count_badge(count, t)),
             );
         }
@@ -734,7 +785,7 @@ impl Home {
 
     /// Drop the harness and project filters, keeping what was typed.
     fn clear_filters(&mut self, cx: &mut Context<Self>) {
-        self.harness = None;
+        self.origin = None;
         self.project = None;
         self.recompute();
         self.pump_digest(cx);
@@ -744,8 +795,8 @@ impl Home {
     /// The filters in force, as words: "Codex, runyard".
     fn filter_words(&self) -> Option<String> {
         let parts: Vec<&str> = self
-            .harness
-            .map(|h| h.name())
+            .origin
+            .map(|o| o.name())
             .into_iter()
             .chain(self.project.as_deref())
             .collect();
@@ -755,7 +806,15 @@ impl Home {
     fn search_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let searching = !self.query.is_empty();
         // The caret shows that typing anywhere in the window lands here.
-        let caret = div().w(px(2.)).h(px(18.)).flex_shrink_0().rounded(px(1.)).bg(t.accent);
+        // It blinks, holds steady while keys are arriving, and is hidden in
+        // a window that does not have the keyboard.
+        let lit = self.window_active && (self.caret_lit || self.typed_at.elapsed() < CARET_BLINK);
+        let caret = div()
+            .w(px(2.))
+            .h(px(18.))
+            .flex_shrink_0()
+            .rounded(px(1.))
+            .bg(if lit { t.accent } else { t.accent.opacity(0.) });
         let text = if searching {
             div()
                 .flex()
@@ -963,7 +1022,7 @@ impl Home {
             .text_color(t.ink3);
         if let Some(session) = self.by_key.get(&hit.key).map(|&i| &self.sessions[i]) {
             origin = origin
-                .child(logo(session.harness, t, 12.))
+                .child(logo(session.origin, t, 12.))
                 .child(
                     div()
                         .min_w(px(0.))
@@ -1275,7 +1334,11 @@ impl Home {
                     .child(if copied {
                         "Copied to clipboard".to_string()
                     } else {
-                        format!("Copy resume command for {}", session.harness.name())
+                        match session.harness {
+                            // Cursor has no way to reopen one conversation.
+                            Harness::Cursor => "Copy command to open the project in Cursor".to_string(),
+                            harness => format!("Copy resume command for {}", harness.name()),
+                        }
                     }),
             )
             .child(
@@ -1545,12 +1608,16 @@ fn count_badge(count: usize, t: &Theme) -> Div {
         .child(count.to_string())
 }
 
-fn logo(harness: Harness, t: &Theme, size: f32) -> impl IntoElement {
-    let (path, color): (&'static str, Hsla) = match harness {
-        Harness::ClaudeCode => ("claude-code.svg", claude_orange()),
-        Harness::Codex => ("codex.svg", t.ink),
-        Harness::OpenCode => ("opencode.svg", t.ink),
-        Harness::Pi => ("pi.svg", t.ink),
+fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
+    let (path, color): (&'static str, Hsla) = match origin {
+        Origin::ClaudeCode => ("claude-code.svg", claude_orange()),
+        Origin::ClaudeDesktop => ("claude.svg", claude_orange()),
+        Origin::Codex => ("codex.svg", t.ink),
+        Origin::CodexDesktop => ("openai.svg", t.ink),
+        Origin::OpenCode => ("opencode.svg", t.ink),
+        Origin::Pi => ("pi.svg", t.ink),
+        Origin::Cursor => ("cursor.svg", t.ink),
+        Origin::T3Code => ("t3.svg", t.ink),
     };
     svg()
         .path(path)
@@ -1568,7 +1635,7 @@ fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
         .font_family(MONO_FONT)
         .text_size(px(12.))
         .text_color(t.ink3)
-        .child(logo(session.harness, t, 14.));
+        .child(logo(session.origin, t, 14.));
     if !session.project().is_empty() {
         row = row.child(session.project().to_string());
     }
@@ -1664,6 +1731,8 @@ fn resume_command(session: &Session) -> String {
         Harness::OpenCode => format!("opencode --session {}", session.id),
         // pi takes the session file itself, which every version accepts.
         Harness::Pi => format!("pi --session '{}'", session.source.replace('\'', "'\\''")),
+        // Cursor conversations cannot be reopened by id; open the project.
+        Harness::Cursor => return format!("cursor {dir}"),
     };
     format!("cd {dir} && {resume}")
 }

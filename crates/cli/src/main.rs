@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use chrono::{Local, TimeZone};
 use scrollback_core::search::Searcher;
 use scrollback_core::summarize;
-use scrollback_core::{Harness, Session, Store};
+use scrollback_core::{Origin, Session, Store};
 use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,7 +13,7 @@ Usage:
   scrollback index                 Update the index from every harness found
   scrollback list [-n N] [--all]   Recent sessions (--all includes sub-agents)
   scrollback search <query> [-n N] Fuzzy search titles, projects and prompts
-  scrollback stats                 Totals per harness
+  scrollback stats                 Totals per source
   scrollback summarize [-n N]      Write summaries for the N most recent sessions
                                    that lack one (default 5). --active includes
                                    sessions used in the last 10 minutes;
@@ -137,14 +137,17 @@ fn search(query: &str, limit: usize) -> Result<()> {
 
 fn stats() -> Result<()> {
     let sessions = Store::open()?.sessions(true)?;
-    for harness in Harness::ALL {
-        let mine: Vec<&Session> = sessions.iter().filter(|s| s.harness == harness).collect();
+    for origin in Origin::ALL {
+        let mine: Vec<&Session> = sessions.iter().filter(|s| s.origin == origin).collect();
+        if mine.is_empty() {
+            continue;
+        }
         let main = mine.iter().filter(|s| s.parent.is_none()).count();
         let tokens: u64 = mine.iter().map(|s| s.tokens()).sum();
         let cached: u64 = mine.iter().map(|s| s.tokens_cached).sum();
         println!(
-            "{:<12} {:>5} sessions  {:>4} sub-agent  {:>8} tokens  {:>8} cached",
-            harness.name(),
+            "{:<15} {:>5} sessions  {:>4} sub-agent  {:>8} tokens  {:>8} cached",
+            origin.name(),
             main,
             mine.len() - main,
             compact(tokens),
@@ -270,8 +273,8 @@ fn print_row(session: &Session) {
         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default();
     println!(
-        "{when}  {:<11} {:<18} {}",
-        session.harness.slug(),
+        "{when}  {:<14} {:<18} {}",
+        session.origin.slug(),
         scrollback_core::squash(session.project(), 18),
         scrollback_core::squash(session.display_title(), 70)
     );

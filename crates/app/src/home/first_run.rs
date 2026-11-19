@@ -5,13 +5,14 @@
 use super::{facts, label, logo, Home};
 use crate::theme::{Theme, MONO_FONT};
 use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent, Window};
-use scrollback_core::{sources, Harness};
+use scrollback_core::{sources, Harness, Origin};
 
 const RECENT_SHOWN: usize = 4;
 
-/// What was found for one harness.
+/// What was found for one harness or app.
 struct Found {
-    harness: Harness,
+    /// Which logo and name to show.
+    origin: Origin,
     /// Where it was looked for, with the home folder written as `~`.
     place: String,
     present: bool,
@@ -21,21 +22,31 @@ struct Found {
 impl Home {
     fn found(&self) -> Vec<Found> {
         let home = scrollback_core::home();
-        Harness::ALL
+        let shown = |path: &std::path::Path| match path.strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.display().to_string(),
+        };
+        let mut found: Vec<Found> = Harness::ALL
             .into_iter()
             .map(|harness| {
                 let location = sources::location(harness);
                 Found {
-                    harness,
+                    origin: harness.origin(),
                     present: location.exists(),
-                    place: match location.strip_prefix(&home) {
-                        Ok(rest) => format!("~/{}", rest.display()),
-                        Err(_) => location.display().to_string(),
-                    },
+                    place: shown(&location),
                     sessions: self.sessions.iter().filter(|s| s.harness == harness).count(),
                 }
             })
-            .collect()
+            .collect();
+        // T3 Code keeps no conversations of its own; it says which of the
+        // other harnesses' sessions were started from it.
+        found.push(Found {
+            origin: Origin::T3Code,
+            present: sources::t3code::present(),
+            place: shown(&sources::t3code::root().join("userdata")),
+            sessions: self.sessions.iter().filter(|s| s.origin == Origin::T3Code).count(),
+        });
+        found
     }
 
     /// Pick whether summaries are written unasked. Without the `claude`
@@ -82,16 +93,29 @@ impl Home {
         let found = self.found();
         let present = found.iter().filter(|f| f.present).count();
         let heading = match present {
-            0 => "No harnesses found on this Mac".to_string(),
-            1 => "Found 1 harness on this Mac".to_string(),
-            n => format!("Found {n} harnesses on this Mac"),
+            0 => "No agents found on this Mac".to_string(),
+            1 => "Found 1 agent on this Mac".to_string(),
+            n => format!("Found {n} agents on this Mac"),
         };
 
+        // A row for each one found; the rest are named in a single line, so
+        // the list stays short however many are supported.
         let mut harnesses = div().flex().flex_col();
-        let last = found.len().saturating_sub(1);
-        for (i, f) in found.iter().enumerate() {
+        let rows: Vec<&Found> = found.iter().filter(|f| f.present).collect();
+        let last = rows.len().saturating_sub(1);
+        for (i, f) in rows.iter().enumerate() {
             harnesses = harnesses.child(
                 harness_row(f, t).when(i < last, |el| el.border_b_1().border_color(t.line)),
+            );
+        }
+        let missing: Vec<&str> = found.iter().filter(|f| !f.present).map(|f| f.origin.name()).collect();
+        if !missing.is_empty() {
+            harnesses = harnesses.child(
+                div()
+                    .pt(px(10.))
+                    .text_size(px(13.))
+                    .text_color(t.ink3)
+                    .child(format!("Also looked for, and did not find: {}.", missing.join(", "))),
             );
         }
 
@@ -385,7 +409,7 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
         .items_center()
         .gap(px(14.))
         .py(px(12.))
-        .child(logo(f.harness, t, 20.))
+        .child(logo(f.origin, t, 20.))
         .child(
             div()
                 .flex_1()
@@ -397,7 +421,7 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
                     div()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(if f.present { t.ink } else { t.ink2 })
-                        .child(f.harness.name()),
+                        .child(f.origin.name()),
                 )
                 .child(
                     div()

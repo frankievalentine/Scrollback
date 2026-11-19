@@ -25,7 +25,7 @@ impl Home {
     /// The sessions the sidebar filters let through.
     fn in_scope(&self) -> impl Iterator<Item = &Session> {
         self.sessions.iter().filter(|session| {
-            self.harness.is_none_or(|h| session.harness == h)
+            self.origin.is_none_or(|o| session.origin == o)
                 && self
                     .project
                     .as_deref()
@@ -38,7 +38,7 @@ impl Home {
         format!(
             "{}|{}|{}",
             self.range_days,
-            self.harness.map_or("", |h| h.slug()),
+            self.origin.map_or("", |o| o.slug()),
             self.project.as_deref().unwrap_or("")
         )
     }
@@ -230,7 +230,7 @@ impl Home {
                     .gap_x(px(48.))
                     .gap_y(px(32.))
                     .px(px(4.))
-                    .child(by_harness(a, t))
+                    .child(by_origin(a, t))
                     .child(over_time(a, t)),
             )
             .child(self.recent_edits(t, cx));
@@ -588,32 +588,32 @@ fn total(name: &'static str, value: String, note: Option<String>, t: &Theme) -> 
         }))
 }
 
-/// One bar per harness, as long as its share of the busiest one's sessions.
-fn by_harness(a: &Activity, t: &Theme) -> Div {
-    let most = a.by_harness.iter().map(|s| s.sessions).max().unwrap_or(1).max(1);
+/// One bar per source, as long as its share of the busiest one's sessions.
+fn by_origin(a: &Activity, t: &Theme) -> Div {
+    let most = a.by_origin.iter().map(|s| s.sessions).max().unwrap_or(1).max(1);
     let mut section = div()
         .flex_1()
         .min_w(px(300.))
         .flex()
         .flex_col()
         .gap(px(14.))
-        .child(label("By harness", t));
-    if a.by_harness.is_empty() {
+        .child(label("By source", t));
+    if a.by_origin.is_empty() {
         return section.child(div().text_color(t.ink3).child("No sessions."));
     }
-    for share in &a.by_harness {
+    for share in &a.by_origin {
         section = section.child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .child(logo(share.harness, t, 16.))
+                .child(logo(share.origin, t, 16.))
                 .child(
                     div()
-                        .w(px(88.))
+                        .w(px(104.))
                         .flex_shrink_0()
                         .text_size(px(13.))
-                        .child(share.harness.name()),
+                        .child(share.origin.name()),
                 )
                 .child(
                     div().flex_1().h(px(6.)).rounded(px(3.)).bg(t.fill).child(

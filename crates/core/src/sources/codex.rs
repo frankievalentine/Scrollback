@@ -2,7 +2,7 @@
 //! (and `~/.codex/archived_sessions/`). Thread names, where the user or the
 //! app set one, are in `~/.codex/session_index.jsonl`.
 
-use crate::model::{Harness, Session};
+use crate::model::{Harness, Origin, Session};
 use crate::sources::{typed_prompt, walk};
 use crate::{home, parse_ts, squash};
 use anyhow::Result;
@@ -65,6 +65,8 @@ struct Payload {
     kind: Option<String>,
     id: Option<Value>,
     cwd: Option<Value>,
+    /// The client that started the session, such as `Codex Desktop`.
+    originator: Option<Value>,
     model: Option<Value>,
     message: Option<Value>,
     git: Option<Value>,
@@ -122,6 +124,12 @@ pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Option<Sess
                 }
                 if let Some(cwd) = text(&payload.cwd) {
                     session.cwd = cwd;
+                }
+                // The desktop app writes the same rollouts as the CLI.
+                let from_app = text(&payload.originator)
+                    .is_some_and(|client| client.to_lowercase().contains("desktop"));
+                if from_app {
+                    session.origin = Origin::CodexDesktop;
                 }
                 session.branch = payload
                     .git

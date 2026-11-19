@@ -1,7 +1,7 @@
 //! Claude Code: one JSONL file per session under `~/.claude/projects/<dir>/`,
 //! with sub-agent transcripts in `<session>/subagents/agent-*.jsonl`.
 
-use crate::model::{Harness, Session};
+use crate::model::{Harness, Origin, Session};
 use crate::sources::{typed_prompt, walk};
 use crate::{home, parse_ts, squash};
 use anyhow::Result;
@@ -27,6 +27,8 @@ struct Line {
     #[serde(rename = "type")]
     kind: Option<String>,
     cwd: Option<String>,
+    /// What started the session: `cli`, `claude-desktop`, and others.
+    entrypoint: Option<String>,
     git_branch: Option<String>,
     timestamp: Option<String>,
     is_meta: Option<Value>,
@@ -108,6 +110,11 @@ pub fn parse(path: &Path) -> Result<Option<Session>> {
         let Ok(parsed) = serde_json::from_str::<Line>(&line) else {
             continue;
         };
+        // The desktop app writes the same files as the command-line tool
+        // and marks every line with where it came from.
+        if parsed.entrypoint.as_deref() == Some("claude-desktop") {
+            session.origin = Origin::ClaudeDesktop;
+        }
         if let Some(ts) = parsed.timestamp.as_deref().and_then(parse_ts) {
             session.touch(ts);
         }

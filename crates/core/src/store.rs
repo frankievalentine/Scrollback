@@ -2,8 +2,8 @@
 //! modification time and size of every source file so unchanged files are
 //! never parsed twice.
 
-use crate::model::{Harness, Session, Summary};
-use crate::sources::{claude_code, codex, opencode, pi};
+use crate::model::{Harness, Origin, Session, Summary};
+use crate::sources::{claude_code, codex, cursor, opencode, pi, t3code};
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -48,7 +48,7 @@ struct Stamp {
 
 /// Bump this when a parser changes what it extracts, so existing indexes
 /// re-read every source file on the next refresh.
-const PARSER_VERSION: i64 = 4;
+const PARSER_VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 create table if not exists sessions (
@@ -90,8 +90,8 @@ create table if not exists digests (
 const UPSERT: &str = "
 insert into sessions (key, harness, id, title, first_prompt, cwd, branch, model,
     started_ms, updated_ms, user_turns, assistant_turns, tool_calls,
-    tokens_in, tokens_out, cost_usd, source, parent, active_ms, tokens_cached)
-values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+    tokens_in, tokens_out, cost_usd, source, parent, active_ms, tokens_cached, origin)
+values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
 on conflict (key) do update set
     title = excluded.title, first_prompt = excluded.first_prompt, cwd = excluded.cwd,
     branch = excluded.branch, model = excluded.model, started_ms = excluded.started_ms,
@@ -99,7 +99,8 @@ on conflict (key) do update set
     assistant_turns = excluded.assistant_turns, tool_calls = excluded.tool_calls,
     tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
     cost_usd = excluded.cost_usd, source = excluded.source, parent = excluded.parent,
-    active_ms = excluded.active_ms, tokens_cached = excluded.tokens_cached
+    active_ms = excluded.active_ms, tokens_cached = excluded.tokens_cached,
+    origin = excluded.origin
 ";
 
 impl Store {
@@ -154,6 +155,17 @@ impl Store {
                 [],
             )?;
         }
+        // `origin` is what the session's own files say about where it was
+        // run; `via` and `via_title` are set when another app, such as
+        // T3 Code, says it started the session.
+        for (column, kind) in [("origin", "text"), ("via", "text"), ("via_title", "text")] {
+            let present = db
+                .prepare("select 1 from pragma_table_info('sessions') where name = ?1")?
+                .exists([column])?;
+            if !present {
+                db.execute(&format!("alter table sessions add column {column} {kind}"), [])?;
+            }
+        }
         let version: i64 = db.query_row("pragma user_version", [], |row| row.get(0))?;
         if version != PARSER_VERSION {
             db.execute("delete from files", [])?;
@@ -170,7 +182,7 @@ impl Store {
             "select harness, id, title, first_prompt, cwd, branch, model, started_ms,
                     updated_ms, user_turns, assistant_turns, tool_calls, tokens_in,
                     tokens_out, cost_usd, source, parent, summary, summary_for_ms, active_ms,
-                    tokens_cached
+                    tokens_cached, origin, via, via_title
              from sessions {filter} order by updated_ms desc"
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -180,10 +192,23 @@ impl Store {
                 .get::<_, Option<String>>(17)?
                 .and_then(|json| serde_json::from_str(&json).ok());
             let summary_for_ms: Option<i64> = row.get(18)?;
+            let harness = Harness::from_slug(&slug).unwrap_or(Harness::ClaudeCode);
+            let slug_of = |column: usize| -> rusqlite::Result<Option<Origin>> {
+                Ok(row
+                    .get::<_, Option<String>>(column)?
+                    .and_then(|slug| Origin::from_slug(&slug)))
+            };
+            // An app that says it started the session wins over the files.
+            let origin = slug_of(22)?.or(slug_of(21)?).unwrap_or(harness.origin());
+            let own_title: String = row.get(2)?;
+            let given_title = row
+                .get::<_, Option<String>>(23)?
+                .filter(|title| !title.trim().is_empty());
             Ok(Session {
-                harness: Harness::from_slug(&slug).unwrap_or(Harness::ClaudeCode),
+                harness,
+                origin,
                 id: row.get(1)?,
-                title: row.get(2)?,
+                title: given_title.unwrap_or(own_title),
                 first_prompt: row.get(3)?,
                 cwd: row.get(4)?,
                 branch: row.get(5)?,
@@ -287,6 +312,35 @@ impl Store {
                 Vec::new()
             }
         };
+        // Cursor's store is one large file, so it is only read again when it
+        // (or its write-ahead log) has changed. `None` means "leave as is".
+        let cursor_key = cursor::db_path().to_string_lossy().into_owned();
+        let cursor_stamp = stamp_of(&cursor::db_path()).map(|main| {
+            let log = stamp_of(Path::new(&format!("{cursor_key}-wal")));
+            Stamp {
+                mtime_ms: main.mtime_ms.max(log.map_or(0, |l| l.mtime_ms)),
+                size: main.size + log.map_or(0, |l| l.size),
+            }
+        });
+        let cursor_sessions = match cursor_stamp {
+            Some(stamp) if known.get(&cursor_key) == Some(&stamp) => {
+                current.insert(cursor_key.clone());
+                None
+            }
+            Some(_) => match cursor::scan() {
+                Ok(sessions) => {
+                    current.insert(cursor_key.clone());
+                    Some(sessions)
+                }
+                Err(err) => {
+                    report.warnings.push(format!("Cursor: {err:#}"));
+                    current.insert(cursor_key.clone());
+                    None
+                }
+            },
+            None => None,
+        };
+        let started_elsewhere = t3code::bindings();
 
         // Write everything in one transaction.
         let tx = self.db.transaction()?;
@@ -343,6 +397,36 @@ impl Store {
                 .collect();
             for key in stale {
                 tx.execute("delete from sessions where key = ?1", [key])?;
+            }
+
+            // Cursor, when its store changed: the same, for its conversations.
+            if let (Some(sessions), Some(stamp)) = (&cursor_sessions, cursor_stamp) {
+                let keep: HashSet<String> = sessions.iter().map(Session::key).collect();
+                for session in sessions {
+                    upsert.execute(rusqlite::params_from_iter(row_params(session)))?;
+                }
+                let stale: Vec<String> = existing
+                    .query_map([Harness::Cursor.slug()], |row| row.get::<_, String>(0))?
+                    .filter_map(Result::ok)
+                    .filter(|key| !keep.contains(key))
+                    .collect();
+                for key in stale {
+                    tx.execute("delete from sessions where key = ?1", [key])?;
+                }
+                set_stamp.execute(params![cursor_key, stamp.mtime_ms, stamp.size])?;
+            }
+
+            // Sessions another app says it started. Worked out afresh each
+            // time, since a thread can be deleted in that app.
+            tx.execute(
+                "update sessions set via = null, via_title = null where via is not null",
+                [],
+            )?;
+            let mut mark = tx.prepare(
+                "update sessions set via = ?1, via_title = ?2 where id = ?3 and parent is null",
+            )?;
+            for binding in &started_elsewhere {
+                mark.execute(params![Origin::T3Code.slug(), binding.title, binding.native_id])?;
             }
         }
         tx.commit()?;
@@ -623,7 +707,8 @@ fn parse_all(todo: &[(Harness, PathBuf, Stamp)], names: &HashMap<String, String>
                     Harness::ClaudeCode => claude_code::parse(path),
                     Harness::Codex => codex::parse(path, names),
                     Harness::Pi => pi::parse(path),
-                    Harness::OpenCode => Ok(None),
+                    // Database-backed; read whole by their own `scan`.
+                    Harness::OpenCode | Harness::Cursor => Ok(None),
                 };
                 out.lock().unwrap().push((path.clone(), *stamp, outcome));
             });
@@ -663,5 +748,6 @@ fn row_params(s: &Session) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(s.parent.clone()),
         Box::new(s.active_ms),
         Box::new(s.tokens_cached as i64),
+        Box::new(s.origin.slug()),
     ]
 }

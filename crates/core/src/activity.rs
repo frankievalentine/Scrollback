@@ -5,7 +5,7 @@
 //! ends and edited files come from summaries, so sessions without one count
 //! towards the totals but contribute neither.
 
-use crate::model::{Harness, Session};
+use crate::model::{Origin, Session};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -25,10 +25,10 @@ pub struct OpenEnd {
     pub text: String,
 }
 
-/// One harness's share of the period.
+/// One source's share of the period.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Share {
-    pub harness: Harness,
+    pub origin: Origin,
     pub sessions: usize,
     pub active_ms: i64,
 }
@@ -70,8 +70,8 @@ pub struct Activity {
     pub costed: usize,
     /// Newest session first.
     pub open_ends: Vec<OpenEnd>,
-    /// Every harness with at least one session, busiest first.
-    pub by_harness: Vec<Share>,
+    /// Every source with at least one session, busiest first.
+    pub by_origin: Vec<Share>,
     /// Oldest first, covering the whole period with no gaps.
     pub buckets: Vec<Bucket>,
     pub edits: Vec<Edit>,
@@ -151,13 +151,13 @@ impl Activity {
             let bucket = (count - 1).saturating_sub(back / width) as usize;
             buckets[bucket].sessions += 1;
 
-            match activity.by_harness.iter_mut().find(|share| share.harness == session.harness) {
+            match activity.by_origin.iter_mut().find(|share| share.origin == session.origin) {
                 Some(share) => {
                     share.sessions += 1;
                     share.active_ms += session.active_ms;
                 }
-                None => activity.by_harness.push(Share {
-                    harness: session.harness,
+                None => activity.by_origin.push(Share {
+                    origin: session.origin,
                     sessions: 1,
                     active_ms: session.active_ms,
                 }),
@@ -194,7 +194,7 @@ impl Activity {
                 }
             }
         }
-        activity.by_harness.sort_by_key(|share| std::cmp::Reverse(share.sessions));
+        activity.by_origin.sort_by_key(|share| std::cmp::Reverse(share.sessions));
         activity.buckets = buckets;
         activity.fingerprint = hasher.finish();
         activity
@@ -204,7 +204,7 @@ impl Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Outcome, Summary};
+    use crate::model::{Harness, Outcome, Summary};
 
     fn noon(now: DateTime<Local>, days_ago: i64) -> i64 {
         let day = now.date_naive() - Duration::days(days_ago);
@@ -302,8 +302,8 @@ mod tests {
             .map(|e| (e.file.as_str(), e.key.as_str()))
             .collect();
         assert_eq!(files, [("src/a.rs", newer.key().as_str()), ("src/b.rs", older.key().as_str())]);
-        assert_eq!(activity.by_harness[0].harness, Harness::ClaudeCode);
-        assert_eq!(activity.by_harness[0].sessions, 2);
+        assert_eq!(activity.by_origin[0].origin, Origin::ClaudeCode);
+        assert_eq!(activity.by_origin[0].sessions, 2);
     }
 
     #[test]

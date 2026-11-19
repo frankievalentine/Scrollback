@@ -4,8 +4,10 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod cursor;
 pub mod opencode;
 pub mod pi;
+pub mod t3code;
 
 use crate::model::Harness;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,7 @@ pub fn location(harness: Harness) -> PathBuf {
         Harness::Codex => codex::root().join("sessions"),
         Harness::OpenCode => opencode::db_path(),
         Harness::Pi => pi::root(),
+        Harness::Cursor => cursor::db_path(),
     }
 }
 
