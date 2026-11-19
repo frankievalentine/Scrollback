@@ -691,7 +691,8 @@ impl Home {
             );
         }
 
-        // Projects, busiest first.
+        // Projects, most recently used first: sessions arrive newest first,
+        // so a project's place is that of its latest session.
         let mut counts: Vec<(String, usize)> = Vec::new();
         for session in &self.sessions {
             let name = session.project();
@@ -703,9 +704,8 @@ impl Home {
                 None => counts.push((name.to_string(), 1)),
             }
         }
-        counts.sort_by(|a, b| b.1.cmp(&a.1));
         let mut projects = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Project", t)));
-        for (i, (name, count)) in counts.into_iter().take(8).enumerate() {
+        for (i, (name, count)) in counts.into_iter().take(60).enumerate() {
             let active = self.project.as_deref() == Some(name.as_str());
             let clicked = name.clone();
             projects = projects.child(

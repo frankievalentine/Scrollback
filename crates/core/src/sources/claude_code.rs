@@ -2,7 +2,7 @@
 //! with sub-agent transcripts in `<session>/subagents/agent-*.jsonl`.
 
 use crate::model::{Harness, Origin, Session};
-use crate::sources::{typed_prompt, walk};
+use crate::sources::{typed_prompt, walk, working_folder};
 use crate::{home, parse_ts, squash};
 use anyhow::Result;
 use serde::Deserialize;
@@ -98,6 +98,8 @@ pub fn parse(path: &Path) -> Result<Option<Session>> {
     }
 
     let mut seen_messages: HashSet<String> = HashSet::new();
+    // How many lines were written in each folder; the session can move.
+    let mut folders: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let mut custom_title = None;
     let mut other_title = None;
 
@@ -118,10 +120,8 @@ pub fn parse(path: &Path) -> Result<Option<Session>> {
         if let Some(ts) = parsed.timestamp.as_deref().and_then(parse_ts) {
             session.touch(ts);
         }
-        if session.cwd.is_empty() {
-            if let Some(cwd) = parsed.cwd {
-                session.cwd = cwd;
-            }
+        if let Some(cwd) = parsed.cwd.filter(|cwd| !cwd.is_empty()) {
+            *folders.entry(cwd).or_insert(0) += 1;
         }
         if let Some(branch) = parsed.git_branch.filter(|b| !b.is_empty()) {
             session.branch = Some(branch);
@@ -183,6 +183,7 @@ pub fn parse(path: &Path) -> Result<Option<Session>> {
         }
     }
 
+    session.cwd = working_folder(&folders).unwrap_or_default();
     if session.user_turns == 0 && session.assistant_turns == 0 {
         return Ok(None);
     }

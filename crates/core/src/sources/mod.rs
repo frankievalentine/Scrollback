@@ -44,6 +44,48 @@ pub(crate) fn walk(root: &Path, keep: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
     found
 }
 
+/// The folder a session belongs to, given how many of its lines were written
+/// in each folder. A session can start in one place and move: a scratch
+/// folder before the project is chosen, a project that is later renamed, a
+/// sub-folder for a few commands. The session is filed under the folder
+/// where most of it happened, counting sub-folders towards their parent,
+/// and preferring folders that still exist.
+pub(crate) fn working_folder(lines: &std::collections::HashMap<String, u32>) -> Option<String> {
+    choose_folder(lines, &|folder| Path::new(folder).is_dir())
+}
+
+fn choose_folder(
+    lines: &std::collections::HashMap<String, u32>,
+    exists: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    let inside = |inner: &str, outer: &str| {
+        inner.len() > outer.len()
+            && inner.starts_with(outer)
+            && (outer.ends_with('/') || inner.as_bytes()[outer.len()] == b'/')
+    };
+    let mut scored: Vec<(&str, u32, bool)> = lines
+        .iter()
+        .filter_map(|(folder, own)| {
+            let below: u32 = lines
+                .iter()
+                .filter(|(other, _)| inside(other, folder))
+                .map(|(_, n)| *n)
+                .sum();
+            let total = own + below;
+            // A folder only passed through on the way somewhere else (the
+            // home folder, say) does not get credit for what happened below.
+            (*own * 10 >= total).then_some((folder.as_str(), total, exists(folder)))
+        })
+        .collect();
+    if scored.iter().any(|(_, _, there)| *there) {
+        scored.retain(|(_, _, there)| *there);
+    }
+    scored
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(a.0.len().cmp(&b.0.len())).then(a.0.cmp(b.0)))
+        .map(|(folder, _, _)| folder.to_string())
+}
+
 /// The part of a user-role message the user typed. Harnesses prepend blocks
 /// such as `<system-reminder>…</system-reminder>` or `<environment_context>…`
 /// to it; those are removed. Returns `None` when nothing typed remains.
@@ -67,4 +109,54 @@ pub(crate) fn typed_prompt(text: &str) -> Option<&str> {
         || rest.starts_with("Caveat:")
         || rest.starts_with("[Request interrupted");
     (!noise).then_some(rest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn folder(counts: &[(&str, u32)], existing: &[&str]) -> Option<String> {
+        let lines: HashMap<String, u32> = counts.iter().map(|(f, n)| (f.to_string(), *n)).collect();
+        choose_folder(&lines, &|f| existing.contains(&f))
+    }
+
+    #[test]
+    fn a_session_is_filed_where_most_of_it_happened() {
+        // Started in a scratch folder, then moved into the project.
+        let counts = [("/tmp/scratch-1", 233), ("/p/scrollback", 1323), ("/p/scrollback/crates/app", 10)];
+        assert_eq!(
+            folder(&counts, &["/tmp/scratch-1", "/p/scrollback", "/p/scrollback/crates/app"]).as_deref(),
+            Some("/p/scrollback")
+        );
+    }
+
+    #[test]
+    fn sub_folders_count_towards_the_project() {
+        let counts = [("/d/runyard", 300), ("/d/runyard/apps/web/src", 900), ("/d/other", 1000)];
+        let all = ["/d/runyard", "/d/runyard/apps/web/src", "/d/other"];
+        assert_eq!(folder(&counts, &all).as_deref(), Some("/d/runyard"));
+    }
+
+    #[test]
+    fn a_folder_only_passed_through_takes_no_credit() {
+        let counts = [("/Users/me", 5), ("/Users/me/p/a", 500)];
+        assert_eq!(folder(&counts, &["/Users/me", "/Users/me/p/a"]).as_deref(), Some("/Users/me/p/a"));
+    }
+
+    #[test]
+    fn a_renamed_project_is_filed_under_its_new_name() {
+        // Most lines predate the rename, but that folder is gone.
+        let counts = [("/p/campsite-exploration", 601), ("/p/Workbarn", 16)];
+        assert_eq!(folder(&counts, &["/p/Workbarn"]).as_deref(), Some("/p/Workbarn"));
+        // With nothing left on disk, the busiest folder still names it.
+        assert_eq!(folder(&counts, &[]).as_deref(), Some("/p/campsite-exploration"));
+    }
+
+    #[test]
+    fn similar_names_are_not_mistaken_for_sub_folders() {
+        let counts = [("/p/power", 10), ("/p/powerhouse", 500)];
+        assert_eq!(folder(&counts, &["/p/power", "/p/powerhouse"]).as_deref(), Some("/p/powerhouse"));
+        assert_eq!(folder(&[], &[]), None);
+    }
 }

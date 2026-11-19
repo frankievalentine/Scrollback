@@ -3,7 +3,7 @@
 //! app set one, are in `~/.codex/session_index.jsonl`.
 
 use crate::model::{Harness, Origin, Session};
-use crate::sources::{typed_prompt, walk};
+use crate::sources::{typed_prompt, walk, working_folder};
 use crate::{home, parse_ts, squash};
 use anyhow::Result;
 use serde::Deserialize;
@@ -103,6 +103,7 @@ pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Option<Sess
         .unwrap_or(stem);
     let mut session = Session::new(Harness::Codex, fallback_id, path.to_string_lossy());
 
+    let mut folders: HashMap<String, u32> = HashMap::new();
     let reader = BufReader::new(std::fs::File::open(path)?);
     for line in reader.lines() {
         let Ok(line) = line else { continue };
@@ -123,7 +124,7 @@ pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Option<Sess
                     session.id = id;
                 }
                 if let Some(cwd) = text(&payload.cwd) {
-                    session.cwd = cwd;
+                    *folders.entry(cwd).or_insert(0) += 1;
                 }
                 // The desktop app writes the same rollouts as the CLI.
                 let from_app = text(&payload.originator)
@@ -142,10 +143,9 @@ pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Option<Sess
                 if let Some(model) = text(&payload.model) {
                     session.model = Some(model);
                 }
-                if session.cwd.is_empty() {
-                    if let Some(cwd) = text(&payload.cwd) {
-                        session.cwd = cwd;
-                    }
+                // Each turn records where it ran; a session can move.
+                if let Some(cwd) = text(&payload.cwd) {
+                    *folders.entry(cwd).or_insert(0) += 1;
                 }
             }
             (Some("event_msg"), Some("user_message")) => {
@@ -175,6 +175,7 @@ pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Option<Sess
         }
     }
 
+    session.cwd = working_folder(&folders).unwrap_or_default();
     if session.user_turns == 0 && session.assistant_turns == 0 {
         return Ok(None);
     }

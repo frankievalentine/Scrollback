@@ -48,7 +48,7 @@ struct Stamp {
 
 /// Bump this when a parser changes what it extracts, so existing indexes
 /// re-read every source file on the next refresh.
-const PARSER_VERSION: i64 = 5;
+const PARSER_VERSION: i64 = 6;
 
 const SCHEMA: &str = "
 create table if not exists sessions (

@@ -265,7 +265,13 @@ impl Session {
 
     /// The last component of the working directory.
     pub fn project(&self) -> &str {
-        Path::new(&self.cwd)
+        // A worktree an agent made inside a repository belongs to that
+        // repository, not to a project named after the worktree.
+        let repository = ["/.claude/worktrees/", "/.worktrees/"]
+            .iter()
+            .find_map(|marker| self.cwd.find(marker))
+            .map_or(self.cwd.as_str(), |at| &self.cwd[..at]);
+        Path::new(repository)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
@@ -289,5 +295,21 @@ impl Session {
         if ts > self.updated_ms {
             self.updated_ms = ts;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worktree_belongs_to_its_repository() {
+        let mut s = Session::new(Harness::ClaudeCode, "s", "test");
+        s.cwd = "/Users/me/Development/runyard".into();
+        assert_eq!(s.project(), "runyard");
+        s.cwd = "/Users/me/Development/runyard/.claude/worktrees/adoring-mirzakhani-bd3bb0".into();
+        assert_eq!(s.project(), "runyard");
+        s.cwd = String::new();
+        assert_eq!(s.project(), "");
     }
 }
