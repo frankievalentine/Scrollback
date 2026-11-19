@@ -60,7 +60,10 @@ pub struct Activity {
     /// How many of those sessions have a summary.
     pub summarized: usize,
     pub active_ms: i64,
+    /// New input plus output.
     pub tokens: u64,
+    /// Context re-read from the prompt cache, kept apart from `tokens`.
+    pub tokens_cached: u64,
     /// Spend, counting only sessions whose harness reports a cost.
     pub cost_usd: f64,
     /// How many sessions that spend covers.
@@ -137,7 +140,8 @@ impl Activity {
             let Some(day) = local_day(session.updated_ms) else { continue };
             activity.sessions += 1;
             activity.active_ms += session.active_ms;
-            activity.tokens += session.tokens_in + session.tokens_out;
+            activity.tokens += session.tokens();
+            activity.tokens_cached += session.tokens_cached;
             if let Some(cost) = session.cost_usd {
                 activity.cost_usd += cost;
                 activity.costed += 1;

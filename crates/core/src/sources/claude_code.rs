@@ -167,10 +167,9 @@ pub fn parse(path: &Path) -> Result<Option<Session>> {
                 if first_sighting {
                     session.assistant_turns += 1;
                     let usage = message.usage.unwrap_or_default();
-                    session.tokens_in += usage.input_tokens
-                        + usage.cache_creation_input_tokens
-                        + usage.cache_read_input_tokens;
+                    session.tokens_in += usage.input_tokens + usage.cache_creation_input_tokens;
                     session.tokens_out += usage.output_tokens;
+                    session.tokens_cached += usage.cache_read_input_tokens;
                 }
             }
             _ => {}

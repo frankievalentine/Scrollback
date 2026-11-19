@@ -78,8 +78,13 @@ struct Info {
 
 #[derive(Deserialize)]
 struct Totals {
+    /// Everything sent to the model, cached or not.
     #[serde(default)]
     input_tokens: u64,
+    /// The part of `input_tokens` that was read from the cache.
+    #[serde(default)]
+    cached_input_tokens: u64,
+    /// Includes reasoning.
     #[serde(default)]
     output_tokens: u64,
 }
@@ -149,8 +154,9 @@ pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Option<Sess
             (Some("event_msg"), Some("token_count")) => {
                 // A running total, so the last one seen is the session total.
                 if let Some(totals) = payload.info.and_then(|i| i.total_token_usage) {
-                    session.tokens_in = totals.input_tokens;
+                    session.tokens_in = totals.input_tokens.saturating_sub(totals.cached_input_tokens);
                     session.tokens_out = totals.output_tokens;
+                    session.tokens_cached = totals.cached_input_tokens;
                 }
             }
             (

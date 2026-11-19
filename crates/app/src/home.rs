@@ -125,9 +125,14 @@ impl Home {
     ) -> Home {
         let config = Config::load();
         // Development aids: `SCROLLBACK_FIRST_RUN=1` shows the first-run
-        // screen again, and `SCROLLBACK_NO_CLAUDE=1` shows it as it looks
-        // without the `claude` command.
-        let first_run = !config.onboarded || std::env::var_os("SCROLLBACK_FIRST_RUN").is_some();
+        // screen again and `=0` skips it without saving anything, and
+        // `SCROLLBACK_NO_CLAUDE=1` behaves as if the `claude` command were
+        // missing, so nothing is sent anywhere.
+        let first_run = match std::env::var("SCROLLBACK_FIRST_RUN").as_deref() {
+            Ok("0") => false,
+            Ok(_) => true,
+            Err(_) => !config.onboarded,
+        };
         let claude_found = std::env::var_os("SCROLLBACK_NO_CLAUDE").is_none()
             && summarize::claude_binary().is_some();
         let mut home = Home {
@@ -432,7 +437,7 @@ impl Home {
     /// one, newest first, a couple at a time. Does nothing when the setting
     /// is off or the plan limit was reported recently.
     fn pump_summaries(&mut self, cx: &mut Context<Self>) {
-        if self.first_run || !self.config.auto_summarize {
+        if self.first_run || !self.claude_found || !self.config.auto_summarize {
             return;
         }
         if self.paused_until.is_some_and(|until| Instant::now() < until) {
@@ -1011,10 +1016,12 @@ impl Home {
             .child(format!("{} prompts", session.user_turns))
             .child(format!("{} replies", session.assistant_turns))
             .child(format!("{} tool calls", session.tool_calls))
-            .child(format!(
-                "{} tokens",
-                compact_number(session.tokens_in + session.tokens_out)
-            ));
+            .child(format!("{} tokens", compact_number(session.tokens())));
+        // Context re-read from the cache on every turn; far larger than the
+        // work itself, so it is shown apart.
+        if session.tokens_cached > 0 {
+            stats = stats.child(format!("{} cached", compact_number(session.tokens_cached)));
+        }
         if let Some(cost) = session.cost_usd {
             stats = stats.child(format!("${cost:.2}"));
         }

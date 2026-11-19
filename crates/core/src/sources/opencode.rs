@@ -28,7 +28,8 @@ pub fn scan() -> Result<Vec<Session>> {
     {
         let mut stmt = db.prepare(
             "select id, parent_id, directory, title, time_created, time_updated,
-                    model, cost, tokens_input, tokens_output
+                    model, cost, tokens_input + tokens_cache_write,
+                    tokens_output + tokens_reasoning, tokens_cache_read
              from session",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -43,6 +44,7 @@ pub fn scan() -> Result<Vec<Session>> {
             s.cost_usd = (cost > 0.0).then_some(cost);
             s.tokens_in = row.get::<_, i64>(8)?.max(0) as u64;
             s.tokens_out = row.get::<_, i64>(9)?.max(0) as u64;
+            s.tokens_cached = row.get::<_, i64>(10)?.max(0) as u64;
             Ok(s)
         })?;
         for row in rows {

@@ -48,7 +48,7 @@ struct Stamp {
 
 /// Bump this when a parser changes what it extracts, so existing indexes
 /// re-read every source file on the next refresh.
-const PARSER_VERSION: i64 = 3;
+const PARSER_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 create table if not exists sessions (
@@ -90,8 +90,8 @@ create table if not exists digests (
 const UPSERT: &str = "
 insert into sessions (key, harness, id, title, first_prompt, cwd, branch, model,
     started_ms, updated_ms, user_turns, assistant_turns, tool_calls,
-    tokens_in, tokens_out, cost_usd, source, parent, active_ms)
-values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+    tokens_in, tokens_out, cost_usd, source, parent, active_ms, tokens_cached)
+values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
 on conflict (key) do update set
     title = excluded.title, first_prompt = excluded.first_prompt, cwd = excluded.cwd,
     branch = excluded.branch, model = excluded.model, started_ms = excluded.started_ms,
@@ -99,7 +99,7 @@ on conflict (key) do update set
     assistant_turns = excluded.assistant_turns, tool_calls = excluded.tool_calls,
     tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
     cost_usd = excluded.cost_usd, source = excluded.source, parent = excluded.parent,
-    active_ms = excluded.active_ms
+    active_ms = excluded.active_ms, tokens_cached = excluded.tokens_cached
 ";
 
 impl Store {
@@ -145,6 +145,15 @@ impl Store {
                 [],
             )?;
         }
+        let has_cached = db
+            .prepare("select 1 from pragma_table_info('sessions') where name = 'tokens_cached'")?
+            .exists([])?;
+        if !has_cached {
+            db.execute(
+                "alter table sessions add column tokens_cached integer not null default 0",
+                [],
+            )?;
+        }
         let version: i64 = db.query_row("pragma user_version", [], |row| row.get(0))?;
         if version != PARSER_VERSION {
             db.execute("delete from files", [])?;
@@ -160,7 +169,8 @@ impl Store {
         let mut stmt = self.db.prepare(&format!(
             "select harness, id, title, first_prompt, cwd, branch, model, started_ms,
                     updated_ms, user_turns, assistant_turns, tool_calls, tokens_in,
-                    tokens_out, cost_usd, source, parent, summary, summary_for_ms, active_ms
+                    tokens_out, cost_usd, source, parent, summary, summary_for_ms, active_ms,
+                    tokens_cached
              from sessions {filter} order by updated_ms desc"
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -185,6 +195,7 @@ impl Store {
                 tool_calls: row.get(11)?,
                 tokens_in: row.get::<_, i64>(12)? as u64,
                 tokens_out: row.get::<_, i64>(13)? as u64,
+                tokens_cached: row.get::<_, i64>(20)? as u64,
                 cost_usd: row.get(14)?,
                 source: row.get(15)?,
                 parent: row.get(16)?,
@@ -649,5 +660,6 @@ fn row_params(s: &Session) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(s.source.clone()),
         Box::new(s.parent.clone()),
         Box::new(s.active_ms),
+        Box::new(s.tokens_cached as i64),
     ]
 }

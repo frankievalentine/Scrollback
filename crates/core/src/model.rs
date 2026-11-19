@@ -100,8 +100,14 @@ pub struct Session {
     pub user_turns: u32,
     pub assistant_turns: u32,
     pub tool_calls: u32,
+    /// Input the model had not seen before: new prompt text, tool results
+    /// and anything written to the prompt cache.
     pub tokens_in: u64,
+    /// Output, including reasoning.
     pub tokens_out: u64,
+    /// Context re-read from the prompt cache. Every turn re-reads the whole
+    /// conversation so far, so this dwarfs the other two and is kept apart.
+    pub tokens_cached: u64,
     pub cost_usd: Option<f64>,
     /// The file or database the session was read from.
     pub source: String,
@@ -130,6 +136,7 @@ impl Session {
             tool_calls: 0,
             tokens_in: 0,
             tokens_out: 0,
+            tokens_cached: 0,
             cost_usd: None,
             source: source.into(),
             parent: None,
@@ -139,6 +146,11 @@ impl Session {
     }
 
     /// Unique across harnesses, e.g. `codex:019e6d09-…`.
+    /// New input plus output: the work done, leaving out cached re-reads.
+    pub fn tokens(&self) -> u64 {
+        self.tokens_in + self.tokens_out
+    }
+
     pub fn key(&self) -> String {
         format!("{}:{}", self.harness.slug(), self.id)
     }

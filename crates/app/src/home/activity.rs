@@ -120,7 +120,10 @@ impl Home {
     /// or out of date. Follows the auto-summarise setting, and waits for
     /// session summaries still being written so the digest is written once.
     pub(super) fn pump_digest(&mut self, cx: &mut Context<Self>) {
-        if self.first_run || self.view != View::Activity || !self.config.auto_summarize {
+        if self.first_run || !self.claude_found {
+            return;
+        }
+        if self.view != View::Activity || !self.config.auto_summarize {
             return;
         }
         if self.paused_until.is_some_and(|until| Instant::now() < until) {
@@ -544,18 +547,19 @@ fn totals(a: &Activity, t: &Theme) -> Div {
         .child(total(
             "Tokens",
             compact_number(a.tokens),
-            // Only some harnesses record what a session cost. The token
-            // count is what the harnesses report, re-read context included.
-            Some(if a.costed > 0 {
-                format!(
+            // New input and output. What was re-read from the cache is far
+            // larger and says little, so it goes in the note. Only some
+            // harnesses record what a session cost.
+            match (a.tokens_cached, a.costed) {
+                (0, 0) => None,
+                (cached, 0) => Some(format!("plus {} re-read from cache", compact_number(cached))),
+                (_, costed) => Some(format!(
                     "${:.2} reported for {} {}",
                     a.cost_usd,
-                    a.costed,
-                    if a.costed == 1 { "session" } else { "sessions" }
-                )
-            } else {
-                "cached context included".to_string()
-            }),
+                    costed,
+                    if costed == 1 { "session" } else { "sessions" }
+                )),
+            },
             t,
         ))
 }

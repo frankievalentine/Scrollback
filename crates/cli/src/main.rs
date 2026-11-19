@@ -137,13 +137,15 @@ fn stats() -> Result<()> {
     for harness in Harness::ALL {
         let mine: Vec<&Session> = sessions.iter().filter(|s| s.harness == harness).collect();
         let main = mine.iter().filter(|s| s.parent.is_none()).count();
-        let tokens: u64 = mine.iter().map(|s| s.tokens_in + s.tokens_out).sum();
+        let tokens: u64 = mine.iter().map(|s| s.tokens()).sum();
+        let cached: u64 = mine.iter().map(|s| s.tokens_cached).sum();
         println!(
-            "{:<12} {:>5} sessions  {:>4} sub-agent  {:>8} tokens",
+            "{:<12} {:>5} sessions  {:>4} sub-agent  {:>8} tokens  {:>8} cached",
             harness.name(),
             main,
             mine.len() - main,
-            compact(tokens)
+            compact(tokens),
+            compact(cached)
         );
     }
     Ok(())
