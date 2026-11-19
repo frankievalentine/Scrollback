@@ -2,6 +2,7 @@
 //! keeps a small local index of it. Nothing here writes to a harness's own
 //! files, and nothing leaves the machine.
 
+pub mod config;
 pub mod model;
 pub mod search;
 pub mod sources;
@@ -9,6 +10,7 @@ pub mod store;
 pub mod summarize;
 pub mod transcript;
 
+pub use config::Config;
 pub use model::{Harness, Outcome, Session, Summary};
 pub use store::{MessageHit, Store};
 

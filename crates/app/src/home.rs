@@ -12,10 +12,22 @@ use gpui::{
     StyledText, Window,
 };
 use scrollback_core::search::{Hit, Searcher};
-use scrollback_core::{summarize, Harness, MessageHit, Outcome, Session, Store, Summary};
+use scrollback_core::{
+    summarize, Config, Harness, MessageHit, Outcome, Session, Store, Summary,
+};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// How long a session must be quiet before a summary is written for it
+/// unprompted, so a session in use is not summarised mid-thought.
+const QUIET_BEFORE_SUMMARY_MS: i64 = 10 * 60 * 1000;
+/// How often the window looks for new or changed sessions.
+const REFRESH_EVERY: Duration = Duration::from_secs(60);
+/// How many summaries are written at once.
+const SUMMARIES_AT_ONCE: usize = 2;
+/// How long to hold off after the Claude plan limit is reported.
+const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 
 /// Refresh the index and read every session from it.
 pub fn load() -> (Vec<Session>, SharedString) {
@@ -69,6 +81,9 @@ pub struct Home {
     busy: HashSet<String>,
     /// The last summary error per session key.
     failed: HashMap<String, String>,
+    config: Config,
+    /// Set when the Claude plan limit was hit; no summaries start before it.
+    paused_until: Option<Instant>,
     searcher: Searcher,
     search_time: Duration,
     list: ListState,
@@ -99,6 +114,8 @@ impl Home {
             reading: None,
             busy: HashSet::new(),
             failed: HashMap::new(),
+            config: Config::load(),
+            paused_until: None,
             searcher: Searcher::new(),
             search_time: Duration::ZERO,
             list: ListState::new(0, ListAlignment::Top, px(800.)),
@@ -106,6 +123,19 @@ impl Home {
             focus: cx.focus_handle(),
         };
         home.recompute();
+        home.pump_summaries(cx);
+
+        // Look for new and changed sessions for as long as the window lives.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(REFRESH_EVERY).await;
+            let (sessions, status) = cx.background_executor().spawn(async { load() }).await;
+            let alive = this.update(cx, |this, cx| this.apply_sessions(sessions, status, cx));
+            if alive.is_err() {
+                break;
+            }
+        })
+        .detach();
+
         // Development aid: write the selected session's summary on launch,
         // to exercise the background path without a click.
         if std::env::var_os("SCROLLBACK_DEV_SUMMARIZE").is_some() {
@@ -275,9 +305,100 @@ impl Home {
 
     fn reindex(&mut self, cx: &mut Context<Self>) {
         let (sessions, status) = load();
+        // A manual reindex is also a request to try again.
+        self.failed.clear();
+        self.paused_until = None;
         self.sessions = sessions;
         self.status = status;
         self.recompute();
+        self.pump_summaries(cx);
+        cx.notify();
+    }
+
+    /// Take in a fresh read of the index. When nothing has changed the view
+    /// is left exactly as it is; otherwise the selection and scroll position
+    /// are carried over.
+    fn apply_sessions(&mut self, sessions: Vec<Session>, status: SharedString, cx: &mut Context<Self>) {
+        let fingerprint = |list: &[Session]| -> Vec<(String, i64, bool)> {
+            list.iter()
+                .map(|s| (s.key(), s.updated_ms, s.summary.is_some()))
+                .collect()
+        };
+        self.status = status;
+        if fingerprint(&sessions) != fingerprint(&self.sessions) {
+            let selected_key = self
+                .selected
+                .and_then(|selection| self.hits.get(selection))
+                .map(|hit| self.sessions[hit.index].key());
+            let reading_key = self
+                .reading
+                .as_ref()
+                .map(|reading| self.sessions[reading.index].key());
+            let scroll = self.list.logical_scroll_top();
+            let expanded = self.expanded;
+
+            self.sessions = sessions;
+            self.recompute();
+
+            let restored = selected_key.and_then(|key| {
+                self.hits
+                    .iter()
+                    .position(|hit| self.sessions[hit.index].key() == key)
+            });
+            if let Some(selection) = restored {
+                self.selected = Some(selection);
+                self.expanded = expanded;
+            }
+            self.list.scroll_to(scroll);
+            if let Some(key) = reading_key {
+                match self.by_key.get(&key).copied() {
+                    Some(index) => {
+                        if let Some(reading) = self.reading.as_mut() {
+                            reading.index = index;
+                        }
+                    }
+                    None => self.reading = None,
+                }
+            }
+        }
+        self.pump_summaries(cx);
+        cx.notify();
+    }
+
+    /// Start summaries for sessions that have gone quiet and lack a current
+    /// one, newest first, a couple at a time. Does nothing when the setting
+    /// is off or the plan limit was reported recently.
+    fn pump_summaries(&mut self, cx: &mut Context<Self>) {
+        if !self.config.auto_summarize {
+            return;
+        }
+        if self.paused_until.is_some_and(|until| Instant::now() < until) {
+            return;
+        }
+        self.paused_until = None;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        while self.busy.len() < SUMMARIES_AT_ONCE {
+            let next = self.sessions.iter().position(|s| {
+                (s.summary.is_none() || s.summary_stale)
+                    && now_ms - s.updated_ms >= QUIET_BEFORE_SUMMARY_MS
+                    && !self.busy.contains(&s.key())
+                    && !self.failed.contains_key(&s.key())
+            });
+            match next {
+                Some(index) => self.start_summary(index, cx),
+                None => break,
+            }
+        }
+    }
+
+    fn toggle_auto_summarize(&mut self, cx: &mut Context<Self>) {
+        self.config.auto_summarize = !self.config.auto_summarize;
+        if let Err(err) = self.config.save() {
+            eprintln!("could not save settings: {err:#}");
+        }
+        self.pump_summaries(cx);
         cx.notify();
     }
 
@@ -417,14 +538,40 @@ impl Home {
             .child(projects)
             .child(div().flex_1())
             .child(
+                nav_row(t, false)
+                    .id("auto-summarise")
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_summarize(cx)))
+                    .child(div().flex_1().child("Auto-summarise"))
+                    .child(
+                        div()
+                            .font_family(MONO_FONT)
+                            .text_size(px(11.))
+                            .text_color(t.ink3)
+                            .child(if self.config.auto_summarize { "on" } else { "off" }),
+                    ),
+            )
+            .child(
                 div()
                     .px(px(10.))
                     .font_family(MONO_FONT)
                     .text_size(px(11.))
                     .line_height(px(17.))
                     .text_color(t.ink3)
-                    .child(self.status.clone()),
+                    .child(self.status.clone())
+                    .children(self.summary_status()),
             )
+    }
+
+    /// A line about summary work in progress, when there is something to say.
+    fn summary_status(&self) -> Option<String> {
+        if self.paused_until.is_some_and(|until| Instant::now() < until) {
+            return Some("summaries paused: plan limit reached".to_string());
+        }
+        match self.busy.len() {
+            0 => None,
+            1 => Some("writing 1 summary…".to_string()),
+            n => Some(format!("writing {n} summaries…")),
+        }
     }
 
     fn search_bar(&self, t: &Theme) -> Div {
@@ -510,12 +657,20 @@ impl Home {
         let Some(index) = self.selected_session() else {
             return;
         };
+        // Asking by hand overrides an earlier failure or pause.
+        self.failed.remove(&self.sessions[index].key());
+        self.paused_until = None;
+        self.start_summary(index, cx);
+    }
+
+    /// Write a summary for one session in the background, unless one is
+    /// already being written for it.
+    fn start_summary(&mut self, index: usize, cx: &mut Context<Self>) {
         let session = self.sessions[index].clone();
         let key = session.key();
         if !self.busy.insert(key.clone()) {
             return;
         }
-        self.failed.remove(&key);
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -543,8 +698,14 @@ impl Home {
                 }
             }
             Err(err) => {
-                eprintln!("summary failed for {key}: {err:#}");
-                self.failed.insert(key, format!("{err:#}"));
+                let message = format!("{err:#}");
+                eprintln!("summary failed for {key}: {message}");
+                // The plan limit affects every request, so stop asking for a
+                // while instead of failing each session in turn.
+                if message.to_lowercase().contains("limit") {
+                    self.paused_until = Some(Instant::now() + LIMIT_PAUSE);
+                }
+                self.failed.insert(key, message);
             }
         }
         // The row's height has changed, so have the list measure it again.
@@ -554,6 +715,7 @@ impl Home {
         if let Some(row) = row {
             self.list.splice(row..row + 1, 1);
         }
+        self.pump_summaries(cx);
         cx.notify();
     }
 
