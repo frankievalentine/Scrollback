@@ -9,6 +9,10 @@ pub struct Config {
     /// Write summaries without being asked, once a session has gone quiet.
     #[serde(default = "yes")]
     pub auto_summarize: bool,
+    /// Whether the first-run screen has been seen and answered. Until it
+    /// has, nothing is summarised unasked.
+    #[serde(default)]
+    pub onboarded: bool,
 }
 
 fn yes() -> bool {
@@ -17,7 +21,7 @@ fn yes() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { auto_summarize: true }
+        Config { auto_summarize: true, onboarded: false }
     }
 }
 

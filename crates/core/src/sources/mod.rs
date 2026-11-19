@@ -6,7 +6,19 @@ pub mod claude_code;
 pub mod codex;
 pub mod opencode;
 
+use crate::model::Harness;
 use std::path::{Path, PathBuf};
+
+/// Where a harness keeps its sessions, or `None` for a harness scrollback
+/// cannot read yet.
+pub fn location(harness: Harness) -> Option<PathBuf> {
+    match harness {
+        Harness::ClaudeCode => Some(claude_code::root()),
+        Harness::Codex => Some(codex::root().join("sessions")),
+        Harness::OpenCode => Some(opencode::db_path()),
+        Harness::Pi => None,
+    }
+}
 
 /// Every file under `root` (recursively) that `keep` accepts.
 pub(crate) fn walk(root: &Path, keep: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {

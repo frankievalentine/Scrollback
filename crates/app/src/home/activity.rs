@@ -120,7 +120,7 @@ impl Home {
     /// or out of date. Follows the auto-summarise setting, and waits for
     /// session summaries still being written so the digest is written once.
     pub(super) fn pump_digest(&mut self, cx: &mut Context<Self>) {
-        if self.view != View::Activity || !self.config.auto_summarize {
+        if self.first_run || self.view != View::Activity || !self.config.auto_summarize {
             return;
         }
         if self.paused_until.is_some_and(|until| Instant::now() < until) {

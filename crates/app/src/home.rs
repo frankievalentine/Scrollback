@@ -2,6 +2,7 @@
 //! with type-to-search over everything.
 
 mod activity;
+mod first_run;
 mod reader;
 
 use crate::theme::{claude_orange, Theme, MONO_FONT, UI_FONT};
@@ -83,6 +84,10 @@ pub struct Home {
     /// set when the selected one has been opened into its full card.
     expanded: bool,
     copied: Option<usize>,
+    /// Showing the first-run screen, which holds everything else back.
+    first_run: bool,
+    /// Whether the `claude` command, which writes summaries, is installed.
+    claude_found: bool,
     view: View,
     /// The period the activity view covers, in days.
     range_days: u32,
@@ -118,6 +123,13 @@ impl Home {
         query: String,
         cx: &mut Context<Self>,
     ) -> Home {
+        let config = Config::load();
+        // Development aids: `SCROLLBACK_FIRST_RUN=1` shows the first-run
+        // screen again, and `SCROLLBACK_NO_CLAUDE=1` shows it as it looks
+        // without the `claude` command.
+        let first_run = !config.onboarded || std::env::var_os("SCROLLBACK_FIRST_RUN").is_some();
+        let claude_found = std::env::var_os("SCROLLBACK_NO_CLAUDE").is_none()
+            && summarize::claude_binary().is_some();
         let mut home = Home {
             sessions,
             hits: Vec::new(),
@@ -131,6 +143,8 @@ impl Home {
             selected: None,
             expanded: false,
             copied: None,
+            first_run,
+            claude_found,
             view: View::Sessions,
             range_days: activity::RANGES[0],
             activity: Activity::default(),
@@ -141,7 +155,7 @@ impl Home {
             reading: None,
             busy: HashSet::new(),
             failed: HashMap::new(),
-            config: Config::load(),
+            config,
             paused_until: None,
             searcher: Searcher::new(),
             search_time: Duration::ZERO,
@@ -149,6 +163,9 @@ impl Home {
             status,
             focus: cx.focus_handle(),
         };
+        if first_run && !claude_found {
+            home.config.auto_summarize = false;
+        }
         home.recompute();
         home.pump_summaries(cx);
 
@@ -415,7 +432,7 @@ impl Home {
     /// one, newest first, a couple at a time. Does nothing when the setting
     /// is off or the plan limit was reported recently.
     fn pump_summaries(&mut self, cx: &mut Context<Self>) {
-        if !self.config.auto_summarize {
+        if self.first_run || !self.config.auto_summarize {
             return;
         }
         if self.paused_until.is_some_and(|until| Instant::now() < until) {
@@ -450,6 +467,10 @@ impl Home {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.first_run {
+            self.first_run_key(event, window, cx);
+            return;
+        }
         let keystroke = &event.keystroke;
         let mods = keystroke.modifiers;
         if self.reading.is_some() {
@@ -1233,6 +1254,18 @@ impl Home {
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::for_appearance(window.appearance());
+        if self.first_run {
+            return div()
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(Self::on_key))
+                .size_full()
+                .bg(t.bg)
+                .text_color(t.ink)
+                .font_family(UI_FONT)
+                .text_size(px(14.))
+                .line_height(px(20.))
+                .child(self.first_run_view(&t, cx));
+        }
         let feed: AnyElement = if self.rows.is_empty() {
             div()
                 .size_full()

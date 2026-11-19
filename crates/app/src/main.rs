@@ -23,6 +23,8 @@ impl AssetSource for Assets {
             "outcome-stalled.svg" => Some(include_bytes!("../assets/outcome-stalled.svg")),
             "view-sessions.svg" => Some(include_bytes!("../assets/view-sessions.svg")),
             "view-activity.svg" => Some(include_bytes!("../assets/view-activity.svg")),
+            "check.svg" => Some(include_bytes!("../assets/check.svg")),
+            "mark.svg" => Some(include_bytes!("../assets/mark.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
