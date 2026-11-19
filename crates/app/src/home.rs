@@ -1,6 +1,7 @@
 //! The home view: a sidebar of filters and a feed of sessions, newest first,
 //! with type-to-search over everything.
 
+mod activity;
 mod reader;
 
 use crate::theme::{claude_orange, Theme, MONO_FONT, UI_FONT};
@@ -13,7 +14,7 @@ use gpui::{
 };
 use scrollback_core::search::{Hit, Searcher};
 use scrollback_core::{
-    summarize, Config, Harness, MessageHit, Outcome, Session, Store, Summary,
+    summarize, Activity, Config, Digest, Harness, MessageHit, Outcome, Session, Store, Summary,
 };
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -48,6 +49,13 @@ pub fn load() -> (Vec<Session>, SharedString) {
     }
 }
 
+/// What the main column is showing.
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Sessions,
+    Activity,
+}
+
 enum Row {
     Header(SharedString),
     /// An index into `Home::hits`.
@@ -75,6 +83,18 @@ pub struct Home {
     /// set when the selected one has been opened into its full card.
     expanded: bool,
     copied: Option<usize>,
+    view: View,
+    /// The period the activity view covers, in days.
+    range_days: u32,
+    /// Totals for that period, worked out when the activity view is showing.
+    activity: Activity,
+    /// The paragraph saved for that period, which may be out of date.
+    digest: Option<Digest>,
+    digest_busy: bool,
+    /// The activity fingerprint the last failed digest was for, so the same
+    /// request is not sent again unasked.
+    digest_failed: Option<u64>,
+    digest_error: Option<String>,
     /// The transcript being read, when the reader is open.
     reading: Option<Reading>,
     /// Keys of sessions whose summary is being written right now.
@@ -111,6 +131,13 @@ impl Home {
             selected: None,
             expanded: false,
             copied: None,
+            view: View::Sessions,
+            range_days: activity::RANGES[0],
+            activity: Activity::default(),
+            digest: None,
+            digest_busy: false,
+            digest_failed: None,
+            digest_error: None,
             reading: None,
             busy: HashSet::new(),
             failed: HashMap::new(),
@@ -148,6 +175,15 @@ impl Home {
                 home.selected = Some(home.hits.len());
             }
             home.open_transcript_now(cx);
+        }
+        // Development aid: `SCROLLBACK_VIEW=activity` opens on the activity
+        // view, and `SCROLLBACK_RANGE=30` picks its period.
+        if std::env::var("SCROLLBACK_VIEW").as_deref() == Ok("activity") {
+            let days = std::env::var("SCROLLBACK_RANGE").ok().and_then(|d| d.parse().ok());
+            home.range_days = days
+                .filter(|d| activity::RANGES.contains(d))
+                .unwrap_or(home.range_days);
+            home.show_activity(cx);
         }
         home
     }
@@ -216,6 +252,9 @@ impl Home {
         self.expanded = false;
         self.copied = None;
         self.list.reset(self.rows.len());
+        if self.view == View::Activity {
+            self.refresh_activity();
+        }
     }
 
     /// How many rows can be selected: session results, then message results.
@@ -307,11 +346,14 @@ impl Home {
         let (sessions, status) = load();
         // A manual reindex is also a request to try again.
         self.failed.clear();
+        self.digest_failed = None;
+        self.digest_error = None;
         self.paused_until = None;
         self.sessions = sessions;
         self.status = status;
         self.recompute();
         self.pump_summaries(cx);
+        self.pump_digest(cx);
         cx.notify();
     }
 
@@ -360,8 +402,12 @@ impl Home {
                     None => self.reading = None,
                 }
             }
+        } else if self.view == View::Activity {
+            // The day may have turned over even though no session changed.
+            self.refresh_activity();
         }
         self.pump_summaries(cx);
+        self.pump_digest(cx);
         cx.notify();
     }
 
@@ -399,6 +445,7 @@ impl Home {
             eprintln!("could not save settings: {err:#}");
         }
         self.pump_summaries(cx);
+        self.pump_digest(cx);
         cx.notify();
     }
 
@@ -416,6 +463,31 @@ impl Home {
             }
             return;
         }
+        if self.view == View::Activity {
+            match keystroke.key.as_str() {
+                "escape" => self.show_sessions(cx),
+                "left" => self.step_range(-1, cx),
+                "right" => self.step_range(1, cx),
+                "1" if mods.platform => self.show_sessions(cx),
+                "q" if mods.platform => cx.quit(),
+                "w" if mods.platform => window.remove_window(),
+                "r" if mods.platform => self.reindex(cx),
+                _ => {
+                    // Typing starts a search, which belongs to the feed.
+                    let types = !(mods.platform || mods.control || mods.function)
+                        && keystroke.key_char.as_deref().is_some_and(|typed| {
+                            !typed.is_empty() && !typed.chars().any(char::is_control)
+                        });
+                    if types {
+                        self.view = View::Sessions;
+                        self.query.push_str(keystroke.key_char.as_deref().unwrap_or(""));
+                        self.recompute();
+                        cx.notify();
+                    }
+                }
+            }
+            return;
+        }
         match keystroke.key.as_str() {
             "right" => self.open_transcript(cx),
             "tab" => self.toggle_expanded(cx),
@@ -428,6 +500,7 @@ impl Home {
             "w" if mods.platform => window.remove_window(),
             "r" if mods.platform => self.reindex(cx),
             "s" if mods.platform => self.summarize_selected(cx),
+            "2" if mods.platform => self.show_activity(cx),
             "escape" => {
                 if self.query.is_empty() {
                     self.harness = None;
@@ -466,6 +539,33 @@ impl Home {
     }
 
     fn sidebar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let view_icon = |path: &'static str, active: bool| {
+            svg()
+                .path(path)
+                .size(px(16.))
+                .flex_shrink_0()
+                .text_color(if active { t.ink } else { t.ink2 })
+        };
+        let on_sessions = self.view == View::Sessions;
+        let views = div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                nav_row(t, on_sessions)
+                    .id("view-sessions")
+                    .on_click(cx.listener(|this, _, _, cx| this.show_sessions(cx)))
+                    .child(view_icon("view-sessions.svg", on_sessions))
+                    .child("Sessions"),
+            )
+            .child(
+                nav_row(t, !on_sessions)
+                    .id("view-activity")
+                    .on_click(cx.listener(|this, _, _, cx| this.show_activity(cx)))
+                    .child(view_icon("view-activity.svg", !on_sessions))
+                    .child("Activity"),
+            );
+
         let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Harness", t)));
         for harness in Harness::ALL {
             let count = self.sessions.iter().filter(|s| s.harness == harness).count();
@@ -476,6 +576,7 @@ impl Home {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.harness = (this.harness != Some(harness)).then_some(harness);
                         this.recompute();
+                        this.pump_digest(cx);
                         cx.notify();
                     }))
                     .child(logo(harness, t, 16.))
@@ -498,7 +599,7 @@ impl Home {
         }
         counts.sort_by(|a, b| b.1.cmp(&a.1));
         let mut projects = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Project", t)));
-        for (i, (name, count)) in counts.into_iter().take(10).enumerate() {
+        for (i, (name, count)) in counts.into_iter().take(8).enumerate() {
             let active = self.project.as_deref() == Some(name.as_str());
             let clicked = name.clone();
             projects = projects.child(
@@ -508,6 +609,7 @@ impl Home {
                         let same = this.project.as_deref() == Some(clicked.as_str());
                         this.project = (!same).then(|| clicked.clone());
                         this.recompute();
+                        this.pump_digest(cx);
                         cx.notify();
                     }))
                     .child(div().flex_1().min_w(px(0.)).truncate().child(name))
@@ -534,6 +636,7 @@ impl Home {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("scrollback"),
             )
+            .child(views)
             .child(harnesses)
             .child(projects)
             .child(div().flex_1())
@@ -568,6 +671,7 @@ impl Home {
             return Some("summaries paused: plan limit reached".to_string());
         }
         match self.busy.len() {
+            0 if self.digest_busy => Some("writing the digest…".to_string()),
             0 => None,
             1 => Some("writing 1 summary…".to_string()),
             n => Some(format!("writing {n} summaries…")),
@@ -591,7 +695,7 @@ impl Home {
                 self.search_time
             )
         } else {
-            "↑↓ move   → read   ↵ copy resume   ⌘S summarise   ⌘R reindex".to_string()
+            "↑↓ move   → read   ↵ copy resume   ⌘S summarise   ⌘2 activity".to_string()
         };
         div().w_full().flex().justify_center().child(
             div()
@@ -715,7 +819,11 @@ impl Home {
         if let Some(row) = row {
             self.list.splice(row..row + 1, 1);
         }
+        if self.view == View::Activity {
+            self.refresh_activity();
+        }
         self.pump_summaries(cx);
+        self.pump_digest(cx);
         cx.notify();
     }
 
@@ -1167,7 +1275,10 @@ impl Render for Home {
                     .flex_col()
                     .pt(px(28.))
                     .when(self.reading.is_some(), |el| el.child(self.reader(&t, cx)))
-                    .when(self.reading.is_none(), |el| {
+                    .when(self.reading.is_none() && self.view == View::Activity, |el| {
+                        el.child(self.activity_view(&t, cx))
+                    })
+                    .when(self.reading.is_none() && self.view == View::Sessions, |el| {
                         el.child(self.search_bar(&t))
                             .child(div().flex_1().min_h(px(0.)).child(feed))
                     }),

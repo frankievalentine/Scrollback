@@ -6,7 +6,7 @@ use crate::model::{Harness, Session, Summary};
 use crate::sources::{claude_code, codex, opencode};
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,14 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub struct Store {
     db: Connection,
+}
+
+/// The paragraph at the top of the activity page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Digest {
+    pub text: String,
+    /// `Activity::fingerprint` of the period it was written from.
+    pub fingerprint: u64,
 }
 
 /// What a refresh did.
@@ -70,6 +78,12 @@ create table if not exists files (
     path text primary key,
     mtime_ms integer not null,
     size integer not null
+);
+create table if not exists digests (
+    scope text primary key,
+    fingerprint text not null,
+    text text not null,
+    written_ms integer not null
 );
 ";
 
@@ -187,6 +201,37 @@ impl Store {
         self.db.execute(
             "update sessions set summary = ?1, summary_for_ms = ?2 where key = ?3",
             params![serde_json::to_string(summary)?, session.updated_ms, session.key()],
+        )?;
+        Ok(())
+    }
+
+    /// The paragraph last written for an activity period. `scope` names the
+    /// period and filters it covers.
+    pub fn digest(&self, scope: &str) -> Result<Option<Digest>> {
+        let found = self
+            .db
+            .query_row(
+                "select text, fingerprint from digests where scope = ?1",
+                params![scope],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        Ok(found.map(|(text, fingerprint)| Digest {
+            text,
+            fingerprint: fingerprint.parse().unwrap_or(0),
+        }))
+    }
+
+    /// Save an activity digest, with the fingerprint of what it was written from.
+    pub fn set_digest(&self, scope: &str, digest: &Digest) -> Result<()> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        self.db.execute(
+            "insert into digests (scope, fingerprint, text, written_ms) values (?1, ?2, ?3, ?4)
+             on conflict (scope) do update set fingerprint = excluded.fingerprint,
+                 text = excluded.text, written_ms = excluded.written_ms",
+            params![scope, digest.fingerprint.to_string(), digest.text, now_ms],
         )?;
         Ok(())
     }

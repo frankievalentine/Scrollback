@@ -329,7 +329,7 @@ impl Home {
 }
 
 /// The same centred, width-limited column the feed uses.
-fn centered(content: impl IntoElement) -> Div {
+pub(super) fn centered(content: impl IntoElement) -> Div {
     div()
         .w_full()
         .flex()

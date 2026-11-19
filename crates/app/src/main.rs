@@ -8,7 +8,7 @@ use gpui::{
 use home::Home;
 use std::borrow::Cow;
 
-/// Harness logos and outcome marks, compiled into the binary.
+/// Harness logos, outcome marks and view icons, compiled into the binary.
 struct Assets;
 
 impl AssetSource for Assets {
@@ -21,6 +21,8 @@ impl AssetSource for Assets {
             "outcome-done.svg" => Some(include_bytes!("../assets/outcome-done.svg")),
             "outcome-partial.svg" => Some(include_bytes!("../assets/outcome-partial.svg")),
             "outcome-stalled.svg" => Some(include_bytes!("../assets/outcome-stalled.svg")),
+            "view-sessions.svg" => Some(include_bytes!("../assets/view-sessions.svg")),
+            "view-activity.svg" => Some(include_bytes!("../assets/view-activity.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -39,7 +41,13 @@ fn main() {
     let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1180.), px(820.)), cx);
+        // Development aid: `SCROLLBACK_HEIGHT=1300` opens a taller window, to
+        // see a whole view in one screenshot.
+        let height = std::env::var("SCROLLBACK_HEIGHT")
+            .ok()
+            .and_then(|h| h.parse::<f32>().ok())
+            .unwrap_or(820.);
+        let bounds = Bounds::centered(None, size(px(1180.), px(height)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
