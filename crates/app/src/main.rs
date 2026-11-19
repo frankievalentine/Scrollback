@@ -3,9 +3,11 @@ mod markdown;
 mod theme;
 
 use gpui::{
-    point, prelude::*, px, size, App, Application, AssetSource, Bounds, SharedString,
-    TitlebarOptions, WindowBounds, WindowOptions,
+    actions, point, prelude::*, px, size, App, Application, AssetSource, Bounds, KeyBinding, Menu,
+    MenuItem, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
 };
+
+actions!(scrollback, [Quit]);
 use home::Home;
 use std::borrow::Cow;
 
@@ -48,6 +50,15 @@ fn main() {
     let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
+        // The menu bar entry every Mac app is expected to have. Everything
+        // else is driven from the window itself.
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus(vec![Menu {
+            name: "scrollback".into(),
+            items: vec![MenuItem::action("Quit scrollback", Quit)],
+        }]);
+
         // Development aid: `SCROLLBACK_HEIGHT=1300` opens a taller window, to
         // see a whole view in one screenshot.
         let height = std::env::var("SCROLLBACK_HEIGHT")

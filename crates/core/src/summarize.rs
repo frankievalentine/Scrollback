@@ -236,9 +236,10 @@ fn step_starts(raw: Option<&Value>, steps: usize, blocks: usize) -> Vec<usize> {
     starts
 }
 
-/// The `claude` binary. Apps launched from the Dock do not inherit the
-/// shell's PATH, so the usual install locations are checked as well.
-pub fn claude_binary() -> Option<PathBuf> {
+/// Where command-line tools are looked for: the PATH this process was given,
+/// then the usual install locations. Apps launched from the Dock or Finder
+/// get a bare PATH without the shell's additions, so those are added back.
+fn tool_dirs() -> Vec<PathBuf> {
     let on_path = std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -249,9 +250,19 @@ pub fn claude_binary() -> Option<PathBuf> {
         home.join(".local/bin"),
         home.join(".claude/local"),
     ];
-    on_path
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for dir in on_path.into_iter().chain(usual) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+/// The `claude` binary, wherever it is installed.
+pub fn claude_binary() -> Option<PathBuf> {
+    tool_dirs()
         .into_iter()
-        .chain(usual)
         .map(|dir| dir.join("claude"))
         .find(|candidate| candidate.is_file())
 }
@@ -267,6 +278,9 @@ fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Va
 
     let mut child = Command::new(binary)
         .current_dir(&workdir)
+        // `claude` may itself be a script that needs node or another tool
+        // from the same places, which a Dock-launched app's PATH lacks.
+        .env("PATH", std::env::join_paths(tool_dirs()).unwrap_or_default())
         .args(["-p", "--model", MODEL])
         .args(["--no-session-persistence", "--output-format", "json"])
         .args(["--json-schema", &schema.to_string()])

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- The app icon: older lines fading up and back, above a live prompt.
+       Drawn on Apple's icon grid: an 824pt rounded square on a 1024pt canvas. -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#17181A"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="#3A3D45" stroke-width="3"/>
+  <rect x="268" y="296" width="330" height="46" rx="23" fill="#ECECEA" fill-opacity="0.16"/>
+  <rect x="268" y="412" width="488" height="46" rx="23" fill="#ECECEA" fill-opacity="0.32"/>
+  <rect x="268" y="528" width="396" height="46" rx="23" fill="#ECECEA" fill-opacity="0.56"/>
+  <path d="M291 650l76 54-76 54" fill="none" stroke="#8AA4FF" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="432" y="681" width="208" height="46" rx="23" fill="#8AA4FF"/>
+</svg>
