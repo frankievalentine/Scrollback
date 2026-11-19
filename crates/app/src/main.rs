@@ -1,4 +1,5 @@
 mod home;
+mod markdown;
 mod theme;
 
 use gpui::{
@@ -50,7 +51,7 @@ fn main() {
             .and_then(|h| h.parse::<f32>().ok())
             .unwrap_or(820.);
         let bounds = Bounds::centered(None, size(px(1180.), px(height)), cx);
-        cx.open_window(
+        let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(760.), px(480.))),
@@ -68,6 +69,34 @@ fn main() {
             },
         )
         .expect("opening the main window");
+
+        // Development aid: `SCROLLBACK_DEV_KEYS="enter r u n"` presses those
+        // keys through the window's own key handling shortly after launch and
+        // logs what the view holds after each, so typing can be checked in a
+        // window that never takes the keyboard.
+        if let Ok(keys) = std::env::var("SCROLLBACK_DEV_KEYS") {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(700))
+                    .await;
+                for key in keys.split_whitespace() {
+                    let Ok(keystroke) = gpui::Keystroke::parse(key) else {
+                        eprintln!("key {key}: not a key");
+                        continue;
+                    };
+                    let handled = cx
+                        .update_window(opened.into(), |_, window, cx| {
+                            window.dispatch_keystroke(keystroke, cx)
+                        })
+                        .unwrap_or(false);
+                    let state = opened
+                        .read_with(cx, |home, _| home.dev_state())
+                        .unwrap_or_default();
+                    eprintln!("key {key}: handled={handled} {state}");
+                }
+            })
+            .detach();
+        }
 
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {

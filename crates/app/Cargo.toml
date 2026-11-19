@@ -13,3 +13,4 @@ scrollback-core = { path = "../core" }
 anyhow.workspace = true
 chrono.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+pulldown-cmark = { version = "0.13", default-features = false }

@@ -4,6 +4,7 @@
 //! those steps, each under a heading that opens and closes.
 
 use super::{facts, outcome_mark, Home};
+use crate::markdown;
 use crate::theme::{Theme, MONO_FONT};
 use gpui::{
     div, list, prelude::*, px, AnyElement, Context, Div, FontWeight, ListAlignment, ListOffset,
@@ -11,8 +12,10 @@ use gpui::{
 };
 use scrollback_core::transcript::{self, Block};
 use scrollback_core::Summary;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::rc::Rc;
 
 /// One stretch of the transcript under a heading.
 struct Step {
@@ -51,6 +54,9 @@ pub(super) struct Reading {
     open: HashSet<usize>,
     /// The step the bracket keys last moved to.
     cursor: Option<usize>,
+    /// Replies already parsed as markdown, by block index, so scrolling
+    /// does not parse them again on every frame.
+    parsed: RefCell<HashMap<usize, Rc<Vec<markdown::Node>>>>,
     lines: Vec<Line>,
     list: ListState,
 }
@@ -66,6 +72,7 @@ impl Reading {
             steps: Vec::new(),
             open: HashSet::new(),
             cursor: None,
+            parsed: RefCell::new(HashMap::new()),
             lines: vec![Line::Head, Line::Status],
             list: ListState::new(2, ListAlignment::Top, px(1200.)),
         }
@@ -86,6 +93,15 @@ impl Reading {
             self.open.extend(holding_focus);
         }
         self.lay_out();
+    }
+
+    /// A reply's markdown, parsed the first time it is shown.
+    fn markdown(&self, block: usize, text: &str) -> Rc<Vec<markdown::Node>> {
+        self.parsed
+            .borrow_mut()
+            .entry(block)
+            .or_insert_with(|| Rc::new(markdown::parse(text)))
+            .clone()
     }
 
     fn lay_out(&mut self) {
@@ -567,7 +583,8 @@ impl Home {
             )
             .into_any_element(),
             Block::Reply(text) => {
-                turn("agent", div().text_color(t.ink2).child(text.clone()), &t).into_any_element()
+                let nodes = reading.markdown(at, text);
+                turn("agent", markdown::render(&nodes, &t, t.ink2, at), &t).into_any_element()
             }
             Block::Note(note) => turn(
                 "",

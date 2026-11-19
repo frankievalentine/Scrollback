@@ -210,6 +210,20 @@ impl Home {
         home
     }
 
+    /// What the view is showing, for the development key-press log.
+    pub fn dev_state(&self) -> String {
+        format!(
+            "first_run={} view={} reading={} query={:?} sessions={} messages={} selected={:?}",
+            self.first_run,
+            if self.view == View::Activity { "activity" } else { "sessions" },
+            self.reading.is_some(),
+            self.query,
+            self.hits.len(),
+            self.message_hits.len(),
+            self.selected,
+        )
+    }
+
     /// Re-run the search and filters, and rebuild the rows.
     fn recompute(&mut self) {
         let started = Instant::now();
@@ -472,6 +486,17 @@ impl Home {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Keys this window acts on stop here, so they are not also offered to
+        // the system's text input. Command shortcuts it does not use (hide,
+        // minimise, switch window) are left for macOS.
+        let ours = !event.keystroke.modifiers.platform
+            || matches!(
+                event.keystroke.key.as_str(),
+                "q" | "w" | "r" | "s" | "1" | "2" | "backspace"
+            );
+        if ours {
+            cx.stop_propagation();
+        }
         if self.first_run {
             self.first_run_key(event, window, cx);
             return;
@@ -707,15 +732,69 @@ impl Home {
         }
     }
 
-    fn search_bar(&self, t: &Theme) -> Div {
+    /// Drop the harness and project filters, keeping what was typed.
+    fn clear_filters(&mut self, cx: &mut Context<Self>) {
+        self.harness = None;
+        self.project = None;
+        self.recompute();
+        self.pump_digest(cx);
+        cx.notify();
+    }
+
+    /// The filters in force, as words: "Codex, runyard".
+    fn filter_words(&self) -> Option<String> {
+        let parts: Vec<&str> = self
+            .harness
+            .map(|h| h.name())
+            .into_iter()
+            .chain(self.project.as_deref())
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+
+    fn search_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let searching = !self.query.is_empty();
+        // The caret shows that typing anywhere in the window lands here.
+        let caret = div().w(px(2.)).h(px(18.)).flex_shrink_0().rounded(px(1.)).bg(t.accent);
         let text = if searching {
-            div().text_color(t.ink).child(self.query.clone())
-        } else {
             div()
-                .text_color(t.ink3)
-                .child("Type to search sessions, projects and prompts")
+                .flex()
+                .items_center()
+                .gap(px(1.))
+                .child(div().min_w(px(0.)).truncate().text_color(t.ink).child(self.query.clone()))
+                .child(caret)
+        } else {
+            div().flex().items_center().gap(px(6.)).child(caret).child(
+                div()
+                    .min_w(px(0.))
+                    .truncate()
+                    .text_color(t.ink3)
+                    .child("Type to search sessions, projects and messages"),
+            )
         };
+        // A filter narrows every search, so it is shown where the search is.
+        let filter = self.filter_words().map(|words| {
+            let line = t.line;
+            div()
+                .id("clear-filters")
+                .flex_shrink_0()
+                .h(px(26.))
+                .px(px(9.))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .rounded(px(6.))
+                .bg(t.raise)
+                .border_1()
+                .border_color(t.line)
+                .text_size(px(12.))
+                .text_color(t.ink2)
+                .cursor_pointer()
+                .hover(move |style| style.bg(line))
+                .on_click(cx.listener(|this, _, _, cx| this.clear_filters(cx)))
+                .child(format!("in {words}"))
+                .child(div().text_color(t.ink3).child("×"))
+        });
         let hint = if searching {
             format!(
                 "{} sessions · {} messages · {:.1?}   tab expand",
@@ -742,7 +821,8 @@ impl Home {
                         .flex()
                         .items_center()
                         .gap(px(12.))
-                        .child(div().flex_1().min_w(px(0.)).truncate().child(text))
+                        .children(filter)
+                        .child(div().flex_1().min_w(px(0.)).child(text))
                         .child(
                             div()
                                 .flex_shrink_0()
@@ -1281,17 +1361,44 @@ impl Render for Home {
                 .child(self.first_run_view(&t, cx));
         }
         let feed: AnyElement = if self.rows.is_empty() {
+            let filtered = self.filter_words();
+            let message = if self.sessions.is_empty() {
+                "No sessions found on this Mac yet.".to_string()
+            } else {
+                match (&filtered, self.query.trim().is_empty()) {
+                    (Some(words), true) => format!("No sessions in {words}."),
+                    (Some(words), false) => format!("Nothing matches in {words}."),
+                    (None, _) => "Nothing matches. Press esc to clear.".to_string(),
+                }
+            };
+            let fill = t.fill;
             div()
                 .size_full()
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .gap(px(12.))
                 .text_color(t.ink3)
-                .child(if self.sessions.is_empty() {
-                    "No sessions found on this Mac yet."
-                } else {
-                    "Nothing matches. Press esc to clear."
-                })
+                .child(message)
+                .children(filtered.is_some().then(|| {
+                    div()
+                        .id("search-everywhere")
+                        .h(px(34.))
+                        .px(px(14.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(t.line)
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.ink)
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(fill))
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_filters(cx)))
+                        .child("Search everywhere")
+                }))
                 .into_any_element()
         } else {
             list(
@@ -1326,7 +1433,7 @@ impl Render for Home {
                         el.child(self.activity_view(&t, cx))
                     })
                     .when(self.reading.is_none() && self.view == View::Sessions, |el| {
-                        el.child(self.search_bar(&t))
+                        el.child(self.search_bar(&t, cx))
                             .child(div().flex_1().min_h(px(0.)).child(feed))
                     }),
             )

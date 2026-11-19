@@ -49,8 +49,12 @@ impl Home {
     fn finish_first_run(&mut self, cx: &mut Context<Self>) {
         self.first_run = false;
         self.config.onboarded = true;
-        if let Err(err) = self.config.save() {
-            eprintln!("could not save settings: {err:#}");
+        // A first run forced for development is a rehearsal: it must not
+        // overwrite the settings the real one saved.
+        if std::env::var_os("SCROLLBACK_FIRST_RUN").is_none() {
+            if let Err(err) = self.config.save() {
+                eprintln!("could not save settings: {err:#}");
+            }
         }
         self.pump_summaries(cx);
         self.pump_digest(cx);
