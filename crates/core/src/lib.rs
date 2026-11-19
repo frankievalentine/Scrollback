@@ -6,8 +6,10 @@ pub mod model;
 pub mod search;
 pub mod sources;
 pub mod store;
+pub mod summarize;
+pub mod transcript;
 
-pub use model::{Harness, Session};
+pub use model::{Harness, Outcome, Session, Summary};
 pub use store::Store;
 
 use std::path::PathBuf;

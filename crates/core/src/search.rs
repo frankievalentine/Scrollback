@@ -1,5 +1,5 @@
 //! Fuzzy search over the short strings of each session: title, project,
-//! branch and first prompt. Queries use fzf-style syntax, so `tokn rfrsh`
+//! branch, first prompt and summary. Queries use fzf-style syntax, so `tokn rfrsh`
 //! matches "token refresh" and each word must match somewhere.
 
 use crate::model::Session;
@@ -56,7 +56,7 @@ impl Searcher {
         for (index, session) in sessions.iter().enumerate() {
             // A match in the title outranks one elsewhere.
             self.indices.clear();
-            let title = Utf32Str::new(&session.title, &mut self.chars);
+            let title = Utf32Str::new(session.display_title(), &mut self.chars);
             if let Some(score) = pattern.indices(title, &mut self.matcher, &mut self.indices) {
                 let mut title_matches = self.indices.clone();
                 title_matches.sort_unstable();
@@ -77,6 +77,10 @@ impl Searcher {
             rest.push_str(session.branch.as_deref().unwrap_or(""));
             rest.push(' ');
             rest.push_str(&session.first_prompt);
+            if let Some(summary) = &session.summary {
+                rest.push(' ');
+                rest.push_str(&summary.summary);
+            }
             let haystack = Utf32Str::new(&rest, &mut self.chars);
             if let Some(score) = pattern.score(haystack, &mut self.matcher) {
                 hits.push(Hit {

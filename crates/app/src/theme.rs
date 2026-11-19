@@ -25,7 +25,14 @@ pub fn claude_orange() -> Hsla {
 }
 
 impl Theme {
+    /// The theme for the window's appearance. `SCROLLBACK_THEME=light` or
+    /// `dark` overrides the system setting.
     pub fn for_appearance(appearance: WindowAppearance) -> Theme {
+        match std::env::var("SCROLLBACK_THEME").as_deref() {
+            Ok("light") => return Theme::light(),
+            Ok("dark") => return Theme::dark(),
+            _ => {}
+        }
         match appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Theme::dark(),
             WindowAppearance::Light | WindowAppearance::VibrantLight => Theme::light(),

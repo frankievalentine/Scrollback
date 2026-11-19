@@ -2,7 +2,7 @@
 //! modification time and size of every source file so unchanged files are
 //! never parsed twice.
 
-use crate::model::{Harness, Session};
+use crate::model::{Harness, Session, Summary};
 use crate::sources::{claude_code, codex, opencode};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -36,7 +36,7 @@ struct Stamp {
 
 /// Bump this when a parser changes what it extracts, so existing indexes
 /// re-read every source file on the next refresh.
-const PARSER_VERSION: i64 = 2;
+const PARSER_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 create table if not exists sessions (
@@ -72,15 +72,16 @@ create table if not exists files (
 const UPSERT: &str = "
 insert into sessions (key, harness, id, title, first_prompt, cwd, branch, model,
     started_ms, updated_ms, user_turns, assistant_turns, tool_calls,
-    tokens_in, tokens_out, cost_usd, source, parent)
-values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+    tokens_in, tokens_out, cost_usd, source, parent, active_ms)
+values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
 on conflict (key) do update set
     title = excluded.title, first_prompt = excluded.first_prompt, cwd = excluded.cwd,
     branch = excluded.branch, model = excluded.model, started_ms = excluded.started_ms,
     updated_ms = excluded.updated_ms, user_turns = excluded.user_turns,
     assistant_turns = excluded.assistant_turns, tool_calls = excluded.tool_calls,
     tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
-    cost_usd = excluded.cost_usd, source = excluded.source, parent = excluded.parent
+    cost_usd = excluded.cost_usd, source = excluded.source, parent = excluded.parent,
+    active_ms = excluded.active_ms
 ";
 
 impl Store {
@@ -96,6 +97,22 @@ impl Store {
         db.pragma_update(None, "journal_mode", "wal")?;
         db.pragma_update(None, "synchronous", "normal")?;
         db.execute_batch(SCHEMA)?;
+        // Added after the first release of the schema.
+        let has_summary_time = db
+            .prepare("select 1 from pragma_table_info('sessions') where name = 'summary_for_ms'")?
+            .exists([])?;
+        if !has_summary_time {
+            db.execute("alter table sessions add column summary_for_ms integer", [])?;
+        }
+        let has_active = db
+            .prepare("select 1 from pragma_table_info('sessions') where name = 'active_ms'")?
+            .exists([])?;
+        if !has_active {
+            db.execute(
+                "alter table sessions add column active_ms integer not null default 0",
+                [],
+            )?;
+        }
         let version: i64 = db.query_row("pragma user_version", [], |row| row.get(0))?;
         if version != PARSER_VERSION {
             db.execute("delete from files", [])?;
@@ -111,11 +128,16 @@ impl Store {
         let mut stmt = self.db.prepare(&format!(
             "select harness, id, title, first_prompt, cwd, branch, model, started_ms,
                     updated_ms, user_turns, assistant_turns, tool_calls, tokens_in,
-                    tokens_out, cost_usd, source, parent
+                    tokens_out, cost_usd, source, parent, summary, summary_for_ms, active_ms
              from sessions {filter} order by updated_ms desc"
         ))?;
         let rows = stmt.query_map([], |row| {
             let slug: String = row.get(0)?;
+            let updated_ms: i64 = row.get(8)?;
+            let summary: Option<Summary> = row
+                .get::<_, Option<String>>(17)?
+                .and_then(|json| serde_json::from_str(&json).ok());
+            let summary_for_ms: Option<i64> = row.get(18)?;
             Ok(Session {
                 harness: Harness::from_slug(&slug).unwrap_or(Harness::ClaudeCode),
                 id: row.get(1)?,
@@ -134,9 +156,21 @@ impl Store {
                 cost_usd: row.get(14)?,
                 source: row.get(15)?,
                 parent: row.get(16)?,
+                active_ms: row.get(19)?,
+                summary_stale: summary.is_some() && summary_for_ms.unwrap_or(0) < updated_ms,
+                summary,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Save a summary, recording which state of the session it describes.
+    pub fn set_summary(&self, session: &Session, summary: &Summary) -> Result<()> {
+        self.db.execute(
+            "update sessions set summary = ?1, summary_for_ms = ?2 where key = ?3",
+            params![serde_json::to_string(summary)?, session.updated_ms, session.key()],
+        )?;
+        Ok(())
     }
 
     /// Bring the index up to date with every harness on this machine.
@@ -317,5 +351,6 @@ fn row_params(s: &Session) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(s.cost_usd),
         Box::new(s.source.clone()),
         Box::new(s.parent.clone()),
+        Box::new(s.active_ms),
     ]
 }

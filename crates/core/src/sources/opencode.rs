@@ -105,7 +105,27 @@ pub fn scan() -> Result<Vec<Session>> {
         }
     }
 
+    // Active time: gaps between consecutive messages, ignoring long pauses.
+    let mut active: HashMap<String, i64> = HashMap::new();
+    {
+        let mut stmt =
+            db.prepare("select session_id, time_created from message order by 1, 2")?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+        let mut last: Option<(String, i64)> = None;
+        for row in rows {
+            let (session, at) = row?;
+            if let Some((prev_session, prev_at)) = &last {
+                let gap = at - prev_at;
+                if *prev_session == session && gap > 0 && gap <= crate::model::IDLE_GAP_MS {
+                    *active.entry(session.clone()).or_insert(0) += gap;
+                }
+            }
+            last = Some((session, at));
+        }
+    }
+
     for s in &mut sessions {
+        s.active_ms = active.get(&s.id).copied().unwrap_or(0);
         s.user_turns = turns.get(&(s.id.clone(), "user".into())).copied().unwrap_or(0);
         s.assistant_turns = turns
             .get(&(s.id.clone(), "assistant".into()))

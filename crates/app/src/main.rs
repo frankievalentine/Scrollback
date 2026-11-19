@@ -8,7 +8,7 @@ use gpui::{
 use home::Home;
 use std::borrow::Cow;
 
-/// Harness logos, compiled into the binary.
+/// Harness logos and outcome marks, compiled into the binary.
 struct Assets;
 
 impl AssetSource for Assets {
@@ -18,6 +18,9 @@ impl AssetSource for Assets {
             "codex.svg" => Some(include_bytes!("../assets/codex.svg")),
             "opencode.svg" => Some(include_bytes!("../assets/opencode.svg")),
             "pi.svg" => Some(include_bytes!("../assets/pi.svg")),
+            "outcome-done.svg" => Some(include_bytes!("../assets/outcome-done.svg")),
+            "outcome-partial.svg" => Some(include_bytes!("../assets/outcome-partial.svg")),
+            "outcome-stalled.svg" => Some(include_bytes!("../assets/outcome-stalled.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -62,6 +65,10 @@ fn main() {
             }
         })
         .detach();
-        cx.activate(true);
+        // SCROLLBACK_BACKGROUND=1 opens the window without taking focus, for
+        // checking the app while someone is typing elsewhere.
+        if std::env::var_os("SCROLLBACK_BACKGROUND").is_none() {
+            cx.activate(true);
+        }
     });
 }

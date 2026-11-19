@@ -9,7 +9,8 @@ use gpui::{
     StyledText, Window,
 };
 use scrollback_core::search::{Hit, Searcher};
-use scrollback_core::{Harness, Session, Store};
+use scrollback_core::{summarize, Harness, Outcome, Session, Store, Summary};
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -47,6 +48,10 @@ pub struct Home {
     project: Option<String>,
     selected: Option<usize>,
     copied: Option<usize>,
+    /// Keys of sessions whose summary is being written right now.
+    busy: HashSet<String>,
+    /// The last summary error per session key.
+    failed: HashMap<String, String>,
     searcher: Searcher,
     search_time: Duration,
     list: ListState,
@@ -70,6 +75,8 @@ impl Home {
             project: None,
             selected: None,
             copied: None,
+            busy: HashSet::new(),
+            failed: HashMap::new(),
             searcher: Searcher::new(),
             search_time: Duration::ZERO,
             list: ListState::new(0, ListAlignment::Top, px(800.)),
@@ -77,6 +84,11 @@ impl Home {
             focus: cx.focus_handle(),
         };
         home.recompute();
+        // Development aid: write the selected session's summary on launch,
+        // to exercise the background path without a click.
+        if std::env::var_os("SCROLLBACK_DEV_SUMMARIZE").is_some() {
+            home.summarize_selected(cx);
+        }
         home
     }
 
@@ -172,6 +184,7 @@ impl Home {
             "q" if mods.platform => cx.quit(),
             "w" if mods.platform => window.remove_window(),
             "r" if mods.platform => self.reindex(cx),
+            "s" if mods.platform => self.summarize_selected(cx),
             "escape" => {
                 if self.query.is_empty() {
                     self.harness = None;
@@ -304,7 +317,7 @@ impl Home {
         let hint = if searching {
             format!("{} matches · {:.1?}", self.hits.len(), self.search_time)
         } else {
-            "↑↓ move   ↵ copy resume command   ⌘R reindex".to_string()
+            "↑↓ move   ↵ copy resume   ⌘S summarise   ⌘R reindex".to_string()
         };
         div().w_full().flex().justify_center().child(
             div()
@@ -362,10 +375,65 @@ impl Home {
             .into_any_element()
     }
 
-    /// One unselected session: time, title, first prompt and a line of facts.
+    /// Write (or rewrite) the selected session's summary in the background.
+    fn summarize_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(hit) = self.selected else { return };
+        let session = self.sessions[self.hits[hit].index].clone();
+        let key = session.key();
+        if !self.busy.insert(key.clone()) {
+            return;
+        }
+        self.failed.remove(&key);
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let work = cx.background_executor().spawn(async move {
+                let written = summarize::summarize(&session)?;
+                Store::open()?.set_summary(&session, &written.summary)?;
+                anyhow::Ok(written.summary)
+            });
+            let result = work.await;
+            this.update(cx, |this, cx| this.summary_arrived(key, result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn summary_arrived(&mut self, key: String, result: anyhow::Result<Summary>, cx: &mut Context<Self>) {
+        self.busy.remove(&key);
+        let index = self.sessions.iter().position(|s| s.key() == key);
+        match result {
+            Ok(summary) => {
+                eprintln!("summary written for {key}: {}", summary.title);
+                if let Some(index) = index {
+                    self.sessions[index].summary = Some(summary);
+                    self.sessions[index].summary_stale = false;
+                }
+            }
+            Err(err) => {
+                eprintln!("summary failed for {key}: {err:#}");
+                self.failed.insert(key, format!("{err:#}"));
+            }
+        }
+        // The row's height has changed, so have the list measure it again.
+        let row = index
+            .and_then(|index| self.hits.iter().position(|hit| hit.index == index))
+            .and_then(|hit| self.row_of(hit));
+        if let Some(row) = row {
+            self.list.splice(row..row + 1, 1);
+        }
+        cx.notify();
+    }
+
+    /// One unselected session: time, title, a line or two about it, and facts.
     fn compact(&self, hit: usize, ix: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let found = &self.hits[hit];
         let session = &self.sessions[found.index];
+        let blurb = match &session.summary {
+            Some(summary) => summary.summary.clone(),
+            None if session.first_prompt != session.title => session.first_prompt.clone(),
+            None => String::new(),
+        };
         div()
             .id(("session", ix))
             .flex()
@@ -395,18 +463,31 @@ impl Home {
                     .gap(px(5.))
                     .child(
                         div()
-                            .text_size(px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(title_text(&session.title, &found.title_matches, t)),
+                            .flex()
+                            .items_center()
+                            .gap(px(16.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .truncate()
+                                    .child(title_text(
+                                        session.display_title(),
+                                        &found.title_matches,
+                                        t,
+                                    )),
+                            )
+                            .children(
+                                session
+                                    .summary
+                                    .as_ref()
+                                    .map(|summary| outcome_mark(summary, false, t)),
+                            ),
                     )
-                    .when(session.first_prompt != session.title, |el| {
-                        el.child(
-                            div()
-                                .text_color(t.ink2)
-                                .line_clamp(2)
-                                .child(session.first_prompt.clone()),
-                        )
+                    .when(!blurb.is_empty(), |el| {
+                        el.child(div().text_color(t.ink2).line_clamp(2).child(blurb))
                     })
                     .child(facts(session, t, false)),
             )
@@ -416,6 +497,8 @@ impl Home {
     fn card(&self, hit: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let found = &self.hits[hit];
         let session = &self.sessions[found.index];
+        let key = session.key();
+        let busy = self.busy.contains(&key);
         let copied = self.copied == Some(hit);
 
         let mut stats = div()
@@ -440,25 +523,109 @@ impl Home {
             stats = stats.child(model.clone());
         }
 
-        div().py(px(8.)).child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(18.))
-                .px(px(30.))
-                .py(px(26.))
-                .rounded(px(14.))
-                .bg(t.raise)
-                .shadow(t.card_shadow.clone())
-                .child(facts(session, t, true))
-                .child(
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .gap(px(18.))
+            .px(px(30.))
+            .py(px(26.))
+            .rounded(px(14.))
+            .bg(t.raise)
+            .shadow(t.card_shadow.clone())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(facts(session, t, true))
+                    .children(
+                        session
+                            .summary
+                            .as_ref()
+                            .map(|summary| outcome_mark(summary, true, t)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(21.))
+                    .line_height(px(27.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title_text(
+                        session.display_title(),
+                        &found.title_matches,
+                        t,
+                    )),
+            );
+
+        match &session.summary {
+            Some(summary) => {
+                card = card.child(
                     div()
-                        .text_size(px(21.))
-                        .line_height(px(27.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(title_text(&session.title, &found.title_matches, t)),
-                )
-                .child(
+                        .text_size(px(15.))
+                        .line_height(px(24.))
+                        .text_color(t.ink2)
+                        .child(summary.summary.clone()),
+                );
+                let mut grid = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(22.))
+                    .pt(px(20.))
+                    .border_t_1()
+                    .border_color(t.line)
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(40.))
+                            .child(section(
+                                "You asked",
+                                std::slice::from_ref(&summary.asked),
+                                Marker::None,
+                                t,
+                            ))
+                            .child(section("What happened", &summary.happened, Marker::Number, t)),
+                    );
+                if !summary.open_ends.is_empty() || !summary.friction.is_empty() {
+                    grid = grid.child(
+                        div()
+                            .flex()
+                            .gap(px(40.))
+                            .child(section("Left open", &summary.open_ends, Marker::Dash, t))
+                            .child(section("Friction", &summary.friction, Marker::Dash, t)),
+                    );
+                }
+                card = card.child(grid);
+                if !summary.files.is_empty() {
+                    let shown = summary.files.len().min(6);
+                    let mut files = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.))
+                        .font_family(MONO_FONT)
+                        .text_size(px(12.))
+                        .text_color(t.ink2);
+                    for file in &summary.files[..shown] {
+                        files = files.child(div().truncate().child(file.clone()));
+                    }
+                    if summary.files.len() > shown {
+                        files = files.child(
+                            div()
+                                .text_color(t.ink3)
+                                .child(format!("and {} more", summary.files.len() - shown)),
+                        );
+                    }
+                    card = card.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(label("Files edited", t))
+                            .child(files),
+                    );
+                }
+            }
+            None => {
+                card = card.child(
                     div()
                         .flex()
                         .flex_col()
@@ -479,40 +646,92 @@ impl Home {
                                     session.first_prompt.clone()
                                 }),
                         ),
-                )
-                .child(stats)
-                .child(
-                    div()
-                        .font_family(MONO_FONT)
-                        .text_size(px(12.))
-                        .text_color(t.ink3)
-                        .truncate()
-                        .child(session.cwd.clone()),
-                )
-                .child(
-                    div().flex().child(
-                        div()
-                            .id("copy-resume")
-                            .h(px(36.))
-                            .px(px(16.))
-                            .flex()
-                            .items_center()
-                            .rounded(px(8.))
-                            .bg(t.accent)
-                            .text_color(t.on_accent)
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .hover(|style| style.opacity(0.9))
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_resume(cx)))
-                            .child(if copied {
-                                "Copied to clipboard".to_string()
-                            } else {
-                                format!("Copy resume command for {}", session.harness.name())
-                            }),
-                    ),
-                ),
-        )
+                );
+            }
+        }
+
+        let summary_action = if busy {
+            "Writing summary…"
+        } else if session.summary.is_none() {
+            "Write summary"
+        } else if session.summary_stale {
+            "Update summary"
+        } else {
+            "Rewrite summary"
+        };
+        let mut actions = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                div()
+                    .id("copy-resume")
+                    .h(px(36.))
+                    .px(px(16.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(8.))
+                    .bg(t.accent)
+                    .text_color(t.on_accent)
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(cx.listener(|this, _, _, cx| this.copy_resume(cx)))
+                    .child(if copied {
+                        "Copied to clipboard".to_string()
+                    } else {
+                        format!("Copy resume command for {}", session.harness.name())
+                    }),
+            )
+            .child(
+                div()
+                    .id("write-summary")
+                    .h(px(36.))
+                    .px(px(16.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(t.line)
+                    .text_color(if busy { t.ink3 } else { t.ink })
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(t.fill))
+                    .on_click(cx.listener(|this, _, _, cx| this.summarize_selected(cx)))
+                    .child(summary_action),
+            );
+        if session.summary_stale && !busy {
+            actions = actions.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(t.ink3)
+                    .child("The session has moved on since this was written."),
+            );
+        }
+
+        card = card
+            .child(stats)
+            .child(
+                div()
+                    .font_family(MONO_FONT)
+                    .text_size(px(12.))
+                    .text_color(t.ink3)
+                    .truncate()
+                    .child(session.cwd.clone()),
+            )
+            .child(actions);
+        if let Some(error) = self.failed.get(&key) {
+            card = card.child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(t.ink2)
+                    .child(format!("The summary could not be written: {error}")),
+            );
+        }
+        div().py(px(8.)).child(card)
     }
 }
 
@@ -574,6 +793,76 @@ fn label(text: impl Into<SharedString>, t: &Theme) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(t.ink3)
         .child(SharedString::from(text.to_uppercase()))
+}
+
+enum Marker {
+    None,
+    Number,
+    Dash,
+}
+
+/// One labelled column of the summary: a heading and its lines.
+fn section(title: &'static str, lines: &[String], marker: Marker, t: &Theme) -> Div {
+    let mut column = div()
+        .flex_1()
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .gap(px(5.))
+        .child(label(title, t));
+    if lines.is_empty() {
+        return column.child(div().text_color(t.ink3).child("Nothing."));
+    }
+    for (i, line) in lines.iter().enumerate() {
+        let text = div().flex_1().min_w(px(0.)).child(line.clone());
+        column = match marker {
+            Marker::None => column.child(text),
+            Marker::Number | Marker::Dash => column.child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .text_color(t.ink3)
+                            .child(match marker {
+                                Marker::Number => format!("{}.", i + 1),
+                                _ => "–".to_string(),
+                            }),
+                    )
+                    .child(text),
+            ),
+        };
+    }
+    column
+}
+
+/// How the session ended: a filled, half or empty mark, plus words.
+fn outcome_mark(summary: &Summary, with_open_ends: bool, t: &Theme) -> Div {
+    let icon = match summary.outcome {
+        Outcome::Done => "outcome-done.svg",
+        Outcome::Partial => "outcome-partial.svg",
+        Outcome::Stalled => "outcome-stalled.svg",
+    };
+    let mut words = summary.outcome.label().to_string();
+    if with_open_ends {
+        match summary.open_ends.len() {
+            0 => {}
+            1 => words.push_str(", 1 open end"),
+            n => words.push_str(&format!(", {n} open ends")),
+        }
+    }
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(7.))
+        .font_family(UI_FONT)
+        .text_size(px(13.))
+        .text_color(t.ink2)
+        .child(svg().path(icon).size(px(11.)).flex_shrink_0().text_color(t.ink))
+        .child(words)
 }
 
 fn nav_row(t: &Theme, active: bool) -> Div {

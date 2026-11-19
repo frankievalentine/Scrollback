@@ -1,8 +1,10 @@
 use anyhow::{bail, Result};
 use chrono::{Local, TimeZone};
 use scrollback_core::search::Searcher;
+use scrollback_core::summarize;
 use scrollback_core::{Harness, Session, Store};
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "\
 scrollback: every coding-agent session on this machine, in one place
@@ -12,14 +14,28 @@ Usage:
   scrollback list [-n N] [--all]   Recent sessions (--all includes sub-agents)
   scrollback search <query> [-n N] Fuzzy search titles, projects and prompts
   scrollback stats                 Totals per harness
+  scrollback summarize [-n N]      Write summaries for the N most recent sessions
+                                   that lack one (default 5). --active includes
+                                   sessions used in the last 10 minutes;
+                                   --redo rewrites summaries that already exist
+  scrollback summarize <query>     Write or rewrite the summary of the best match
+  scrollback show <query>          Print the summary of the best match
+  scrollback preview <query>       Print exactly what `summarize` would send
 ";
 
 fn main() -> Result<()> {
+    // Exit quietly when output is piped into something that stops reading,
+    // such as `scrollback list | head`.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let limit = take_value(&mut args, "-n")?
         .map(|n| n.parse::<usize>())
         .transpose()?;
     let all = take_flag(&mut args, "--all");
+    let active = take_flag(&mut args, "--active");
+    let redo = take_flag(&mut args, "--redo");
 
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
@@ -33,6 +49,19 @@ fn main() -> Result<()> {
             search(&query, limit.unwrap_or(15))
         }
         "stats" => stats(),
+        "summarize" if args.len() > 1 => {
+            let session = best_match(&args[1..].join(" "))?;
+            let written = summarize::summarize(&session)?;
+            Store::open()?.set_summary(&session, &written.summary)?;
+            show(&args[1..].join(" "))
+        }
+        "summarize" => summarize_pending(limit.unwrap_or(5), active, redo),
+        "show" => show(&args[1..].join(" ")),
+        "preview" => {
+            let session = best_match(&args[1..].join(" "))?;
+            println!("{}", summarize::preview(&session)?);
+            Ok(())
+        }
         "" | "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
@@ -99,6 +128,112 @@ fn stats() -> Result<()> {
     Ok(())
 }
 
+/// The session a query matches best.
+fn best_match(query: &str) -> Result<Session> {
+    if query.trim().is_empty() {
+        bail!("give a few words to pick a session, for example: scrollback show runyard redesign");
+    }
+    let mut sessions = Store::open()?.sessions(false)?;
+    let hits = Searcher::new().search(query, &sessions);
+    match hits.first() {
+        Some(hit) => Ok(sessions.swap_remove(hit.index)),
+        None => bail!("no session matches `{query}`"),
+    }
+}
+
+fn show(query: &str) -> Result<()> {
+    let session = best_match(query)?;
+    print_row(&session);
+    let Some(summary) = &session.summary else {
+        println!("\nNo summary yet. Run `scrollback summarize` to write one.");
+        return Ok(());
+    };
+    println!("\n{}  [{}]", summary.title, summary.outcome.label());
+    println!("\n{}", summary.summary);
+    println!("\nYou asked\n  {}", summary.asked);
+    for (heading, lines) in [
+        ("What happened", &summary.happened),
+        ("Left open", &summary.open_ends),
+        ("Friction", &summary.friction),
+        ("Files edited", &summary.files),
+    ] {
+        if lines.is_empty() {
+            continue;
+        }
+        println!("\n{heading}");
+        for line in lines {
+            println!("  - {line}");
+        }
+    }
+    if session.summary_stale {
+        println!("\nThe session has had activity since this summary was written.");
+    }
+    Ok(())
+}
+
+fn summarize_pending(limit: usize, include_active: bool, redo: bool) -> Result<()> {
+    let store = Store::open()?;
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+    let pending: Vec<Session> = store
+        .sessions(false)?
+        .into_iter()
+        .filter(|s| redo || s.summary.is_none() || s.summary_stale)
+        .filter(|s| include_active || now_ms - s.updated_ms > 10 * 60 * 1000)
+        .take(limit)
+        .collect();
+    if pending.is_empty() {
+        println!("Every session already has a current summary.");
+        return Ok(());
+    }
+
+    // A few at a time; each one is a separate short request.
+    let started = Instant::now();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (tx, rx) = mpsc::channel();
+    let mut cost = 0.0;
+    let mut written = 0;
+    std::thread::scope(|scope| -> Result<()> {
+        for _ in 0..pending.len().min(4) {
+            let tx = tx.clone();
+            let (next, pending) = (&next, &pending);
+            scope.spawn(move || loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(session) = pending.get(i) else { break };
+                let _ = tx.send((i, summarize::summarize(session)));
+            });
+        }
+        drop(tx);
+        for (i, outcome) in rx {
+            let session = &pending[i];
+            match outcome {
+                Ok(done) => {
+                    store.set_summary(session, &done.summary)?;
+                    cost += done.cost_usd;
+                    written += 1;
+                    println!(
+                        "{:<8} {:<16} {}",
+                        done.summary.outcome.label().to_lowercase(),
+                        scrollback_core::squash(session.project(), 16),
+                        done.summary.title
+                    );
+                }
+                Err(err) => eprintln!(
+                    "failed   {:<16} {}: {err:#}",
+                    scrollback_core::squash(session.project(), 16),
+                    scrollback_core::squash(&session.title, 40)
+                ),
+            }
+        }
+        Ok(())
+    })?;
+    println!(
+        "Wrote {written} of {} summaries in {:.0?}, reported cost ${cost:.4}.",
+        pending.len(),
+        started.elapsed()
+    );
+    Ok(())
+}
+
 fn print_row(session: &Session) {
     let when = Local
         .timestamp_millis_opt(session.updated_ms)
@@ -109,7 +244,7 @@ fn print_row(session: &Session) {
         "{when}  {:<11} {:<18} {}",
         session.harness.slug(),
         scrollback_core::squash(session.project(), 18),
-        scrollback_core::squash(&session.title, 70)
+        scrollback_core::squash(session.display_title(), 70)
     );
 }
 

@@ -1,4 +1,42 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// A pause longer than this between two events is treated as time away.
+pub const IDLE_GAP_MS: i64 = 5 * 60 * 1000;
+
+/// How a session ended, as judged by the summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome {
+    Done,
+    Partial,
+    Stalled,
+}
+
+impl Outcome {
+    pub fn label(self) -> &'static str {
+        match self {
+            Outcome::Done => "Done",
+            Outcome::Partial => "Partial",
+            Outcome::Stalled => "Stalled",
+        }
+    }
+}
+
+/// A written account of one session. Everything except `files` is written by
+/// the model; `files` is taken directly from the session's edit tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Summary {
+    pub title: String,
+    pub summary: String,
+    pub asked: String,
+    pub happened: Vec<String>,
+    pub open_ends: Vec<String>,
+    pub friction: Vec<String>,
+    pub outcome: Outcome,
+    #[serde(default)]
+    pub files: Vec<String>,
+}
 
 /// A coding-agent harness whose session history scrollback can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -56,6 +94,9 @@ pub struct Session {
     pub model: Option<String>,
     pub started_ms: i64,
     pub updated_ms: i64,
+    /// Time the session was actually in use: the sum of gaps between
+    /// consecutive events, ignoring gaps longer than `IDLE_GAP_MS`.
+    pub active_ms: i64,
     pub user_turns: u32,
     pub assistant_turns: u32,
     pub tool_calls: u32,
@@ -66,6 +107,9 @@ pub struct Session {
     pub source: String,
     /// Set for sub-agent sessions, which are hidden from the main list.
     pub parent: Option<String>,
+    pub summary: Option<Summary>,
+    /// True when the session has had activity since its summary was written.
+    pub summary_stale: bool,
 }
 
 impl Session {
@@ -80,6 +124,7 @@ impl Session {
             model: None,
             started_ms: 0,
             updated_ms: 0,
+            active_ms: 0,
             user_turns: 0,
             assistant_turns: 0,
             tool_calls: 0,
@@ -88,12 +133,22 @@ impl Session {
             cost_usd: None,
             source: source.into(),
             parent: None,
+            summary: None,
+            summary_stale: false,
         }
     }
 
     /// Unique across harnesses, e.g. `codex:019e6d09-…`.
     pub fn key(&self) -> String {
         format!("{}:{}", self.harness.slug(), self.id)
+    }
+
+    /// The summary's title when there is one, otherwise the harness's.
+    pub fn display_title(&self) -> &str {
+        match &self.summary {
+            Some(summary) if !summary.title.is_empty() => &summary.title,
+            _ => &self.title,
+        }
     }
 
     /// The last component of the working directory.
@@ -104,12 +159,18 @@ impl Session {
             .unwrap_or("")
     }
 
+    /// How long the session was in use. A session resumed days later counts
+    /// only the time around its events, not the days in between.
     pub fn duration_ms(&self) -> i64 {
-        (self.updated_ms - self.started_ms).max(0)
+        self.active_ms
     }
 
     /// Widen the session's time range to include `ts`.
     pub(crate) fn touch(&mut self, ts: i64) {
+        let gap = ts - self.updated_ms;
+        if self.updated_ms != 0 && gap > 0 && gap <= IDLE_GAP_MS {
+            self.active_ms += gap;
+        }
         if self.started_ms == 0 || ts < self.started_ms {
             self.started_ms = ts;
         }

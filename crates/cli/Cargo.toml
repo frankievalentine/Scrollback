@@ -12,3 +12,4 @@ path = "src/main.rs"
 scrollback-core = { path = "../core" }
 anyhow.workspace = true
 chrono.workspace = true
+libc = "0.2"
