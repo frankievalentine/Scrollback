@@ -1,0 +1,14 @@
+[package]
+name = "scrollback-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "scrollback"
+path = "src/main.rs"
+
+[dependencies]
+scrollback-core = { path = "../core" }
+anyhow.workspace = true
+chrono.workspace = true
