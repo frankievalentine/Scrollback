@@ -150,9 +150,11 @@ impl Origin {
     pub fn name(self) -> &'static str {
         match self {
             Origin::ClaudeCode => "Claude Code",
-            Origin::ClaudeDesktop => "Claude desktop",
+            // The desktop apps go by their own names: the Claude app, and
+            // the ChatGPT app, which is where Codex's desktop sessions run.
+            Origin::ClaudeDesktop => "Claude",
             Origin::Codex => "Codex",
-            Origin::CodexDesktop => "Codex desktop",
+            Origin::CodexDesktop => "ChatGPT",
             Origin::OpenCode => "OpenCode",
             Origin::Pi => "pi",
             Origin::Cursor => "Cursor",
@@ -162,6 +164,15 @@ impl Origin {
 
     pub fn from_slug(slug: &str) -> Option<Origin> {
         Origin::ALL.into_iter().find(|o| o.slug() == slug)
+    }
+
+    /// Whether this is an app that runs sessions, as opposed to a harness's
+    /// own command-line tool.
+    pub fn is_app(self) -> bool {
+        matches!(
+            self,
+            Origin::ClaudeDesktop | Origin::CodexDesktop | Origin::Cursor | Origin::T3Code
+        )
     }
 }
 

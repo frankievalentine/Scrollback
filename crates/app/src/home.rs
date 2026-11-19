@@ -666,13 +666,14 @@ impl Home {
                     .child("Activity"),
             );
 
-        // One row for each program sessions were run from. Only those with
-        // sessions are listed, so the list stays short as more are supported.
+        // One row for each program sessions were run from. The command-line
+        // harnesses are always listed; apps are listed once they have
+        // sessions, so the list stays short as more are supported.
         let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Source", t)));
         for origin in Origin::ALL {
             let count = self.sessions.iter().filter(|s| s.origin == origin).count();
             let active = self.origin == Some(origin);
-            if count == 0 && !active {
+            if origin.is_app() && count == 0 && !active {
                 continue;
             }
             harnesses = harnesses.child(
@@ -742,9 +743,20 @@ impl Home {
                     .child("scrollback"),
             )
             .child(views)
-            .child(harnesses)
-            .child(projects)
-            .child(div().flex_1())
+            // The lists scroll on their own, so the settings and status
+            // below stay in view however many sources and projects there are.
+            .child(
+                div()
+                    .id("sidebar-lists")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(22.))
+                    .child(harnesses)
+                    .child(projects),
+            )
             .child(
                 nav_row(t, false)
                     .id("auto-summarise")
