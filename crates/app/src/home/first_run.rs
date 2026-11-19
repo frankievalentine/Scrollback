@@ -12,9 +12,8 @@ const RECENT_SHOWN: usize = 4;
 /// What was found for one harness.
 struct Found {
     harness: Harness,
-    /// Where it was looked for, with the home folder written as `~`. `None`
-    /// for a harness that cannot be read yet.
-    place: Option<String>,
+    /// Where it was looked for, with the home folder written as `~`.
+    place: String,
     present: bool,
     sessions: usize,
 }
@@ -28,11 +27,11 @@ impl Home {
                 let location = sources::location(harness);
                 Found {
                     harness,
-                    present: location.as_ref().is_some_and(|path| path.exists()),
-                    place: location.map(|path| match path.strip_prefix(&home) {
+                    present: location.exists(),
+                    place: match location.strip_prefix(&home) {
                         Ok(rest) => format!("~/{}", rest.display()),
-                        Err(_) => path.display().to_string(),
-                    }),
+                        Err(_) => location.display().to_string(),
+                    },
                     sessions: self.sessions.iter().filter(|s| s.harness == harness).count(),
                 }
             })
@@ -365,11 +364,10 @@ impl Home {
 
 fn harness_row(f: &Found, t: &Theme) -> Div {
     let quiet = |text: &'static str| div().text_size(px(13.)).text_color(t.ink3).child(text);
-    let status = match (&f.place, f.present, f.sessions) {
-        (None, _, _) => quiet("Not supported yet"),
-        (Some(_), false, _) => quiet("Not found"),
-        (Some(_), true, 0) => quiet("No sessions yet"),
-        (Some(_), true, n) => div()
+    let status = match (f.present, f.sessions) {
+        (false, _) => quiet("Not found"),
+        (true, 0) => quiet("No sessions yet"),
+        (true, n) => div()
             .flex()
             .items_center()
             .gap(px(8.))
@@ -378,7 +376,6 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
             .child(svg().path("check.svg").size(px(14.)).flex_shrink_0().text_color(t.ink))
             .child(if n == 1 { "1 session".to_string() } else { format!("{n} sessions") }),
     };
-    let known = f.place.is_some();
     div()
         .flex()
         .items_center()
@@ -395,21 +392,17 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(if known { t.ink } else { t.ink2 })
+                        .text_color(if f.present { t.ink } else { t.ink2 })
                         .child(f.harness.name()),
                 )
-                .child(match &f.place {
-                    Some(place) => div()
+                .child(
+                    div()
                         .truncate()
                         .font_family(MONO_FONT)
                         .text_size(px(12.))
                         .text_color(t.ink3)
-                        .child(place.clone()),
-                    None => div()
-                        .text_size(px(12.))
-                        .text_color(t.ink3)
-                        .child("scrollback cannot read its sessions yet"),
-                }),
+                        .child(f.place.clone()),
+                ),
         )
         .child(status.flex_shrink_0())
 }

@@ -3,7 +3,7 @@
 //! never parsed twice.
 
 use crate::model::{Harness, Session, Summary};
-use crate::sources::{claude_code, codex, opencode};
+use crate::sources::{claude_code, codex, opencode, pi};
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -261,7 +261,8 @@ impl Store {
         let listed = claude_code::files()
             .into_iter()
             .map(|p| (Harness::ClaudeCode, p))
-            .chain(codex::files().into_iter().map(|p| (Harness::Codex, p)));
+            .chain(codex::files().into_iter().map(|p| (Harness::Codex, p)))
+            .chain(pi::files().into_iter().map(|p| (Harness::Pi, p)));
         for (harness, path) in listed {
             let Some(stamp) = stamp_of(&path) else {
                 continue;
@@ -621,7 +622,8 @@ fn parse_all(todo: &[(Harness, PathBuf, Stamp)], names: &HashMap<String, String>
                 let outcome = match harness {
                     Harness::ClaudeCode => claude_code::parse(path),
                     Harness::Codex => codex::parse(path, names),
-                    Harness::OpenCode | Harness::Pi => Ok(None),
+                    Harness::Pi => pi::parse(path),
+                    Harness::OpenCode => Ok(None),
                 };
                 out.lock().unwrap().push((path.clone(), *stamp, outcome));
             });

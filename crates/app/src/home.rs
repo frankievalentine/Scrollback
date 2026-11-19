@@ -1548,7 +1548,8 @@ fn resume_command(session: &Session) -> String {
         Harness::ClaudeCode => format!("claude --resume {}", session.id),
         Harness::Codex => format!("codex resume {}", session.id),
         Harness::OpenCode => format!("opencode --session {}", session.id),
-        Harness::Pi => format!("pi --session {}", session.id),
+        // pi takes the session file itself, which every version accepts.
+        Harness::Pi => format!("pi --session '{}'", session.source.replace('\'', "'\\''")),
     };
     format!("cd {dir} && {resume}")
 }

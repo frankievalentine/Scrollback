@@ -38,7 +38,7 @@ pub fn events(session: &Session) -> Result<Vec<Event>> {
         Harness::ClaudeCode => claude_code(session),
         Harness::Codex => codex(session),
         Harness::OpenCode => opencode(session),
-        Harness::Pi => Ok(Vec::new()),
+        Harness::Pi => crate::sources::pi::events(session),
     }
 }
 
