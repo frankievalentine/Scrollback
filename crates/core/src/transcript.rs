@@ -311,6 +311,55 @@ fn opencode(session: &Session) -> Result<Vec<Event>> {
     Ok(out)
 }
 
+/// One tool call: its name and what it was aimed at.
+pub type Call = (String, Option<String>);
+
+/// Events grouped for reading: a run of tool calls becomes one block.
+#[derive(Debug, Clone)]
+pub enum Block {
+    Prompt(String),
+    Reply(String),
+    Tools(Vec<Call>),
+    Note(String),
+}
+
+/// Group a session's events into the blocks a reader sees.
+pub fn blocks(events: Vec<Event>) -> Vec<Block> {
+    let mut out: Vec<Block> = Vec::new();
+    for event in events {
+        match event {
+            Event::Prompt(text) => out.push(Block::Prompt(text)),
+            Event::Reply(text) => out.push(Block::Reply(text)),
+            Event::Note(note) => out.push(Block::Note(note)),
+            Event::Tool { name, target } => match out.last_mut() {
+                Some(Block::Tools(calls)) => calls.push((name, target)),
+                _ => out.push(Block::Tools(vec![(name, target)])),
+            },
+        }
+    }
+    out
+}
+
+/// "6 calls · Read ×4, Grep ×2"
+pub fn tools_line(calls: &[Call]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for (name, _) in calls {
+        match counts.iter_mut().find(|(n, _)| n == name) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((name, 1)),
+        }
+    }
+    let names: Vec<String> = counts
+        .iter()
+        .map(|(name, count)| match count {
+            1 => name.to_string(),
+            _ => format!("{name} ×{count}"),
+        })
+        .collect();
+    let noun = if calls.len() == 1 { "call" } else { "calls" };
+    format!("{} {noun} · {}", calls.len(), names.join(", "))
+}
+
 /// True for tools that change files, whatever the harness calls them.
 fn edits_files(tool: &str) -> bool {
     let tool = tool.to_ascii_lowercase();

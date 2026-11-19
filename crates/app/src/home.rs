@@ -1,7 +1,10 @@
 //! The home view: a sidebar of filters and a feed of sessions, newest first,
 //! with type-to-search over everything.
 
+mod reader;
+
 use crate::theme::{claude_orange, Theme, MONO_FONT, UI_FONT};
+use reader::Reading;
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
     div, list, prelude::*, px, svg, AnyElement, App, ClipboardItem, Context, Div, FocusHandle,
@@ -48,6 +51,8 @@ pub struct Home {
     project: Option<String>,
     selected: Option<usize>,
     copied: Option<usize>,
+    /// The transcript being read, when the reader is open.
+    reading: Option<Reading>,
     /// Keys of sessions whose summary is being written right now.
     busy: HashSet<String>,
     /// The last summary error per session key.
@@ -75,6 +80,7 @@ impl Home {
             project: None,
             selected: None,
             copied: None,
+            reading: None,
             busy: HashSet::new(),
             failed: HashMap::new(),
             searcher: Searcher::new(),
@@ -88,6 +94,10 @@ impl Home {
         // to exercise the background path without a click.
         if std::env::var_os("SCROLLBACK_DEV_SUMMARIZE").is_some() {
             home.summarize_selected(cx);
+        }
+        // Development aid: open straight into the selected session's transcript.
+        if std::env::var_os("SCROLLBACK_DEV_READ").is_some() {
+            home.open_transcript_now(cx);
         }
         home
     }
@@ -177,7 +187,19 @@ impl Home {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         let mods = keystroke.modifiers;
+        if self.reading.is_some() {
+            // The reader has its own small set of keys; typing does nothing.
+            match keystroke.key.as_str() {
+                "escape" | "left" => self.close_transcript(cx),
+                "enter" => self.copy_resume(cx),
+                "q" if mods.platform => cx.quit(),
+                "w" if mods.platform => window.remove_window(),
+                _ => {}
+            }
+            return;
+        }
         match keystroke.key.as_str() {
+            "right" => self.open_transcript(cx),
             "down" => self.move_selection(1, cx),
             "up" => self.move_selection(-1, cx),
             "enter" => self.copy_resume(cx),
@@ -317,7 +339,7 @@ impl Home {
         let hint = if searching {
             format!("{} matches · {:.1?}", self.hits.len(), self.search_time)
         } else {
-            "↑↓ move   ↵ copy resume   ⌘S summarise   ⌘R reindex".to_string()
+            "↑↓ move   → read   ↵ copy resume   ⌘S summarise   ⌘R reindex".to_string()
         };
         div().w_full().flex().justify_center().child(
             div()
@@ -687,6 +709,23 @@ impl Home {
             )
             .child(
                 div()
+                    .id("read-transcript")
+                    .h(px(36.))
+                    .px(px(16.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(t.line)
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(t.fill))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_transcript(cx)))
+                    .child("Read transcript"),
+            )
+            .child(
+                div()
                     .id("write-summary")
                     .h(px(36.))
                     .px(px(16.))
@@ -779,8 +818,11 @@ impl Render for Home {
                     .flex()
                     .flex_col()
                     .pt(px(28.))
-                    .child(self.search_bar(&t))
-                    .child(div().flex_1().min_h(px(0.)).child(feed)),
+                    .when(self.reading.is_some(), |el| el.child(self.reader(&t, cx)))
+                    .when(self.reading.is_none(), |el| {
+                        el.child(self.search_bar(&t))
+                            .child(div().flex_1().min_h(px(0.)).child(feed))
+                    }),
             )
     }
 }
