@@ -36,6 +36,15 @@ pub struct Summary {
     pub outcome: Outcome,
     #[serde(default)]
     pub files: Vec<String>,
+    /// For each step in `happened`, the transcript block it begins at,
+    /// counting from zero. Empty for summaries written before steps were
+    /// tied to the transcript, or when the model's answer could not be used.
+    #[serde(default)]
+    pub step_starts: Vec<usize>,
+    /// How many transcript blocks the session had when this was written, so
+    /// anything after them can be shown as newer than the summary.
+    #[serde(default)]
+    pub blocks_seen: usize,
 }
 
 /// A coding-agent harness whose session history scrollback can read.

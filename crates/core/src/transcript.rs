@@ -340,6 +340,20 @@ pub fn blocks(events: Vec<Event>) -> Vec<Block> {
     out
 }
 
+/// How many blocks `blocks` would make of these events.
+pub fn block_count(events: &[Event]) -> usize {
+    let mut count = 0;
+    let mut in_tools = false;
+    for event in events {
+        let is_tool = matches!(event, Event::Tool { .. });
+        if !(is_tool && in_tools) {
+            count += 1;
+        }
+        in_tools = is_tool;
+    }
+    count
+}
+
 /// "6 calls · Read ×4, Grep ×2"
 pub fn tools_line(calls: &[Call]) -> String {
     let mut counts: Vec<(&str, usize)> = Vec::new();
@@ -415,6 +429,9 @@ fn shorten(text: &str, limit: usize) -> String {
 /// The text a summary is written from: a short header, then the conversation
 /// with runs of tool calls collapsed to one bracketed line. When that is
 /// longer than `budget` characters the middle is dropped and marked.
+///
+/// Each block is numbered from 1, and block `#n` here is block `n - 1` of
+/// `blocks`, so a summary can say where in the transcript a step begins.
 pub fn condense(session: &Session, events: &[Event], budget: usize) -> String {
     let mut blocks: Vec<String> = Vec::new();
     let mut tools: Vec<(String, usize)> = Vec::new();
@@ -477,6 +494,9 @@ pub fn condense(session: &Session, events: &[Event], budget: usize) -> String {
         }
     }
     flush(&mut blocks, &mut tools, &mut touched);
+    for (i, block) in blocks.iter_mut().enumerate() {
+        block.insert_str(0, &format!("#{} ", i + 1));
+    }
 
     let started = Local
         .timestamp_millis_opt(session.started_ms)
@@ -522,4 +542,53 @@ pub fn condense(session: &Session, events: &[Event], budget: usize) -> String {
     ));
     text.push_str(&blocks[tail_start..].join("\n\n"));
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str) -> Event {
+        Event::Tool { name: name.to_string(), target: None }
+    }
+
+    #[test]
+    fn condensed_numbers_line_up_with_blocks() {
+        let events = vec![
+            Event::Prompt("fix the bug".into()),
+            Event::Reply("Looking.".into()),
+            tool("read"),
+            tool("read"),
+            tool("edit"),
+            Event::Note("the turn failed: timeout".into()),
+            tool("bash"),
+            Event::Reply("Fixed.".into()),
+        ];
+        assert_eq!(block_count(&events), 6);
+        assert_eq!(blocks(events.clone()).len(), 6);
+
+        let session = Session::new(Harness::ClaudeCode, "s", "test");
+        let text = condense(&session, &events, 10_000);
+        let numbered: Vec<&str> = text.split("\n\n").filter(|b| b.starts_with('#')).collect();
+        assert_eq!(numbered.len(), 6);
+        assert!(numbered[0].starts_with("#1 USER: fix the bug"));
+        assert!(numbered[2].starts_with("#3 [tools: read ×2, edit"));
+        assert!(numbered[3].starts_with("#4 [the turn failed"));
+        assert!(numbered[5].starts_with("#6 AGENT: Fixed."));
+    }
+
+    #[test]
+    fn numbers_survive_the_middle_being_trimmed() {
+        let mut events = Vec::new();
+        for i in 0..40 {
+            events.push(Event::Prompt(format!("request {i} {}", "x".repeat(200))));
+            events.push(Event::Reply(format!("reply {i} {}", "y".repeat(200))));
+        }
+        let session = Session::new(Harness::ClaudeCode, "s", "test");
+        let text = condense(&session, &events, 4_000);
+        assert!(text.contains("#1 USER: request 0"));
+        assert!(text.contains("blocks from the middle of the session removed here"));
+        // The last block keeps its true number, not its position in the text.
+        assert!(text.contains("#80 AGENT: reply 39"));
+    }
 }

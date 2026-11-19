@@ -483,6 +483,9 @@ impl Home {
             match keystroke.key.as_str() {
                 "escape" | "left" => self.close_transcript(cx),
                 "enter" => self.copy_resume(cx),
+                "]" => self.move_step(1, cx),
+                "[" => self.move_step(-1, cx),
+                "o" if !mods.platform => self.toggle_current_step(cx),
                 "q" if mods.platform => cx.quit(),
                 "w" if mods.platform => window.remove_window(),
                 _ => {}
@@ -847,6 +850,10 @@ impl Home {
         }
         if self.view == View::Activity {
             self.refresh_activity();
+        }
+        // A transcript open on this session takes up the new steps.
+        if let Some(index) = index {
+            self.regroup_transcript(index);
         }
         self.pump_summaries(cx);
         self.pump_digest(cx);

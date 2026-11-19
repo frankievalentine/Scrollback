@@ -28,6 +28,9 @@ You write the entry for one coding-agent session in a developer's session log.
 You are given a condensed transcript: the developer's prompts (USER), the agent's \
 replies (AGENT), and bracketed notes. Tool output is not included.
 
+Every block starts with its number, such as #12. The numbers are there only so \
+you can say where a step begins. Never mention them in any text you write.
+
 About the bracketed notes:
 - [tools: …] lists the tools the agent used between replies.
 - [trimmed: …] marks text that was removed to keep the transcript short. The \
@@ -55,6 +58,10 @@ problem, what changed, and where it stands now.
 developer might have put it.
 - happened: two to five steps in order, one sentence of at most 25 words each. \
 Pick the steps that mattered; leave out routine ones.
+- step_starts: one number for each step in happened, in the same order: the \
+number of the block where that step begins. The first step begins at block 1. \
+The numbers go up, and each step begins at a different block. If a step began in \
+a part that was trimmed, give the first block shown after it.
 - open_ends: things the developer would have to act on to finish the job: work \
 explicitly deferred, a failing test, an uncommitted change, a question the agent \
 asked that was never answered. At most four, at most 20 words each. Leave out \
@@ -79,11 +86,15 @@ fn schema() -> Value {
             "summary": { "type": "string" },
             "asked": { "type": "string" },
             "happened": lines,
+            "step_starts": { "type": "array", "items": { "type": "integer" } },
             "open_ends": lines,
             "friction": lines,
             "outcome": { "type": "string", "enum": ["done", "partial", "stalled"] }
         },
-        "required": ["title", "summary", "asked", "happened", "open_ends", "friction", "outcome"],
+        "required": [
+            "title", "summary", "asked", "happened", "step_starts", "open_ends", "friction",
+            "outcome"
+        ],
         "additionalProperties": false
     })
 }
@@ -107,9 +118,14 @@ pub fn summarize(session: &Session) -> Result<Written> {
         bail!("the session has no readable conversation");
     }
     let condensed = transcript::condense(session, &events, BUDGET);
-    let (value, cost_usd) = ask_claude(INSTRUCTIONS, &schema(), &condensed)?;
+    let (mut value, cost_usd) = ask_claude(INSTRUCTIONS, &schema(), &condensed)?;
+    // Taken out before the rest is checked, so an unusable answer here costs
+    // the grouping and not the whole summary.
+    let starts = value.as_object_mut().and_then(|fields| fields.remove("step_starts"));
     let mut summary: Summary =
         serde_json::from_value(value).context("the summary did not have the expected shape")?;
+    summary.blocks_seen = transcript::block_count(&events);
+    summary.step_starts = step_starts(starts.as_ref(), summary.happened.len(), summary.blocks_seen);
     summary.files = transcript::files_edited(session, &events);
     summary.files.truncate(24);
     Ok(Written { summary, cost_usd })
@@ -195,6 +211,29 @@ pub fn digest(sessions: &[&Session], days: u32) -> Result<WrittenDigest> {
         bail!("claude returned an empty digest");
     }
     Ok(WrittenDigest { text, cost_usd })
+}
+
+/// Turn the model's block numbers, which count from 1, into block indexes.
+/// Returns nothing unless there is exactly one usable number per step. The
+/// first step always begins at the start, and no step begins before the one
+/// ahead of it.
+fn step_starts(raw: Option<&Value>, steps: usize, blocks: usize) -> Vec<usize> {
+    let Some(numbers) = raw.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    if steps == 0 || blocks == 0 || numbers.len() != steps {
+        return Vec::new();
+    }
+    let mut starts = Vec::with_capacity(steps);
+    for number in numbers {
+        let Some(number) = number.as_f64().filter(|n| *n >= 0.0) else {
+            return Vec::new();
+        };
+        let index = (number as usize).saturating_sub(1).min(blocks - 1);
+        let floor = starts.last().copied().unwrap_or(0);
+        starts.push(if starts.is_empty() { 0 } else { index.max(floor) });
+    }
+    starts
 }
 
 /// The `claude` binary. Apps launched from the Dock do not inherit the
@@ -287,4 +326,32 @@ fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Va
         bail!("claude returned no structured output");
     }
     Ok((structured, reply["total_cost_usd"].as_f64().unwrap_or(0.0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_numbers_become_indexes() {
+        let raw = json!([1, 4, 9]);
+        assert_eq!(step_starts(Some(&raw), 3, 20), [0, 3, 8]);
+    }
+
+    #[test]
+    fn the_first_step_starts_at_the_top_and_steps_never_go_back() {
+        let raw = json!([3, 2, 50]);
+        assert_eq!(step_starts(Some(&raw), 3, 10), [0, 1, 9]);
+        let raw = json!([1, 6, 4]);
+        assert_eq!(step_starts(Some(&raw), 3, 10), [0, 5, 5]);
+    }
+
+    #[test]
+    fn an_answer_that_does_not_fit_the_steps_is_dropped() {
+        assert!(step_starts(None, 3, 10).is_empty());
+        assert!(step_starts(Some(&json!([1, 2])), 3, 10).is_empty());
+        assert!(step_starts(Some(&json!([1, "two", 3])), 3, 10).is_empty());
+        assert!(step_starts(Some(&json!([1, -2, 3])), 3, 10).is_empty());
+        assert!(step_starts(Some(&json!("1, 2, 3")), 3, 10).is_empty());
+    }
 }

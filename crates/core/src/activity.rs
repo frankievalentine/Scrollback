@@ -234,6 +234,8 @@ mod tests {
             friction: Vec::new(),
             outcome: Outcome::Done,
             files: files.iter().map(|s| s.to_string()).collect(),
+            step_starts: Vec::new(),
+            blocks_seen: 0,
         }
     }
 

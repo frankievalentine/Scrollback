@@ -1,5 +1,7 @@
 //! The transcript view: one session read top to bottom, with each run of
-//! tool calls folded into a single line that opens on click.
+//! tool calls folded into a single line that opens on click. When the
+//! session's summary says where its steps begin, the transcript is cut into
+//! those steps, each under a heading that opens and closes.
 
 use super::{facts, outcome_mark, Home};
 use crate::theme::{Theme, MONO_FONT};
@@ -8,7 +10,29 @@ use gpui::{
     ListState, Window,
 };
 use scrollback_core::transcript::{self, Block};
+use scrollback_core::Summary;
 use std::collections::HashSet;
+use std::ops::Range;
+
+/// One stretch of the transcript under a heading.
+struct Step {
+    /// The step's number in the summary, or `None` for what came after the
+    /// summary was written.
+    number: Option<usize>,
+    title: String,
+    /// The blocks it covers.
+    blocks: Range<usize>,
+}
+
+/// One row of the reader's list.
+#[derive(Clone, Copy)]
+enum Line {
+    Head,
+    /// Shown instead of blocks while the session is read, or if that failed.
+    Status,
+    Step(usize),
+    Block(usize),
+}
 
 pub(super) struct Reading {
     /// Index into `Home::sessions`.
@@ -18,9 +42,176 @@ pub(super) struct Reading {
     error: Option<String>,
     /// The block a search result pointed at; shown first and marked.
     focus: Option<usize>,
-    /// Tool blocks the reader has opened.
+    /// Tool blocks the reader has opened, by block index.
     expanded: HashSet<usize>,
+    /// The transcript cut into the summary's steps. Empty when the summary
+    /// does not say where its steps begin; the transcript is then one run.
+    steps: Vec<Step>,
+    /// Steps whose blocks are showing.
+    open: HashSet<usize>,
+    /// The step the bracket keys last moved to.
+    cursor: Option<usize>,
+    lines: Vec<Line>,
     list: ListState,
+}
+
+impl Reading {
+    fn new(index: usize, focus: Option<usize>) -> Reading {
+        Reading {
+            index,
+            blocks: None,
+            error: None,
+            focus,
+            expanded: HashSet::new(),
+            steps: Vec::new(),
+            open: HashSet::new(),
+            cursor: None,
+            lines: vec![Line::Head, Line::Status],
+            list: ListState::new(2, ListAlignment::Top, px(1200.)),
+        }
+    }
+
+    /// Cut the transcript into steps and lay the rows out again. The steps
+    /// start closed, as an outline, because a first step can run to many
+    /// screens. When a search led here, the step holding that message is open.
+    fn group(&mut self, summary: Option<&Summary>) {
+        let count = self.blocks.as_ref().map_or(0, Vec::len);
+        self.steps = summary.map(|s| steps_of(s, count)).unwrap_or_default();
+        self.open.clear();
+        self.cursor = None;
+        if !self.steps.is_empty() {
+            let holding_focus = self
+                .focus
+                .and_then(|block| self.steps.iter().position(|step| step.blocks.contains(&block)));
+            self.open.extend(holding_focus);
+        }
+        self.lay_out();
+    }
+
+    fn lay_out(&mut self) {
+        let mut lines = vec![Line::Head];
+        match &self.blocks {
+            None => lines.push(Line::Status),
+            Some(blocks) if self.steps.is_empty() => {
+                lines.extend((0..blocks.len()).map(Line::Block));
+            }
+            Some(_) => {
+                for (i, step) in self.steps.iter().enumerate() {
+                    lines.push(Line::Step(i));
+                    if self.open.contains(&i) {
+                        lines.extend(step.blocks.clone().map(Line::Block));
+                    }
+                }
+            }
+        }
+        self.lines = lines;
+        self.list.reset(self.lines.len());
+    }
+
+    fn line_of_step(&self, step: usize) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|line| matches!(line, Line::Step(i) if *i == step))
+    }
+
+    fn line_of_block(&self, block: usize) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|line| matches!(line, Line::Block(i) if *i == block))
+    }
+
+    /// Open or close one step, leaving the rest of the list where it is.
+    fn toggle_step(&mut self, step: usize) {
+        let (Some(at), Some(range)) = (
+            self.line_of_step(step),
+            self.steps.get(step).map(|s| s.blocks.clone()),
+        ) else {
+            return;
+        };
+        let first = at + 1;
+        if self.open.remove(&step) {
+            self.lines.drain(first..first + range.len());
+            self.list.splice(first..first + range.len(), 0);
+        } else {
+            self.open.insert(step);
+            let count = range.len();
+            self.lines.splice(first..first, range.map(Line::Block));
+            self.list.splice(first..first, count);
+        }
+        // The heading changes with it.
+        self.list.splice(at..at + 1, 1);
+    }
+}
+
+/// Where each of the summary's steps falls in a transcript of `count`
+/// blocks. Blocks added since the summary was written get a step of their
+/// own at the end. Empty when the summary does not place its steps.
+fn steps_of(summary: &Summary, count: usize) -> Vec<Step> {
+    let starts = &summary.step_starts;
+    if count == 0 || starts.is_empty() || starts.len() != summary.happened.len() {
+        return Vec::new();
+    }
+    // What the summary covered; everything, for one that did not record it.
+    let covered = match summary.blocks_seen {
+        0 => count,
+        seen => seen.min(count),
+    };
+    let mut steps = Vec::new();
+    let mut from = 0;
+    for (i, title) in summary.happened.iter().enumerate() {
+        let start = starts[i].min(covered).max(from);
+        let end = starts
+            .get(i + 1)
+            .map_or(covered, |next| (*next).min(covered).max(start));
+        steps.push(Step {
+            number: Some(i + 1),
+            title: title.clone(),
+            blocks: start..end,
+        });
+        from = end;
+    }
+    if let Some(first) = steps.first_mut() {
+        first.blocks.start = 0;
+    }
+    if covered < count {
+        steps.push(Step {
+            number: None,
+            title: "Since this summary was written".to_string(),
+            blocks: covered..count,
+        });
+    }
+    steps
+}
+
+/// "3 prompts · 41 tool calls · 1 failed or interrupted"
+fn step_facts(blocks: &[Block]) -> String {
+    let (mut prompts, mut calls, mut notes) = (0, 0, 0);
+    for block in blocks {
+        match block {
+            Block::Prompt(_) => prompts += 1,
+            Block::Tools(list) => calls += list.len(),
+            Block::Note(_) => notes += 1,
+            Block::Reply(_) => {}
+        }
+    }
+    let mut parts = Vec::new();
+    match prompts {
+        0 => {}
+        1 => parts.push("1 prompt".to_string()),
+        n => parts.push(format!("{n} prompts")),
+    }
+    match calls {
+        0 => {}
+        1 => parts.push("1 tool call".to_string()),
+        n => parts.push(format!("{n} tool calls")),
+    }
+    if notes > 0 {
+        parts.push(format!("{notes} failed or interrupted"));
+    }
+    if parts.is_empty() && !blocks.is_empty() {
+        parts.push("replies only".to_string());
+    }
+    parts.join(" · ")
 }
 
 fn read_blocks(session: &scrollback_core::Session) -> anyhow::Result<Vec<Block>> {
@@ -34,15 +225,8 @@ impl Home {
             return;
         };
         let session = self.sessions[index].clone();
-        self.reading = Some(Reading {
-            index,
-            blocks: None,
-            error: None,
-            focus: self.selected_message().map(|hit| hit.block),
-            expanded: HashSet::new(),
-            // Row 0 is the header, row 1 the loading line.
-            list: ListState::new(2, ListAlignment::Top, px(1200.)),
-        });
+        let focus = self.selected_message().map(|hit| hit.block);
+        self.reading = Some(Reading::new(index, focus));
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -63,14 +247,8 @@ impl Home {
             return;
         };
         let result = read_blocks(&self.sessions[index]);
-        self.reading = Some(Reading {
-            index,
-            blocks: None,
-            error: None,
-            focus: self.selected_message().map(|hit| hit.block),
-            expanded: HashSet::new(),
-            list: ListState::new(2, ListAlignment::Top, px(1200.)),
-        });
+        let focus = self.selected_message().map(|hit| hit.block);
+        self.reading = Some(Reading::new(index, focus));
         self.transcript_arrived(index, result, cx);
     }
 
@@ -86,20 +264,28 @@ impl Home {
         };
         match result {
             Ok(blocks) => {
-                reading.list.reset(blocks.len() + 1);
-                // Start at the message a search result pointed to. Row 0 is
-                // the header, so block n is row n + 1.
-                if let Some(block) = reading.focus.filter(|block| *block < blocks.len()) {
+                reading.blocks = Some(blocks);
+                reading.group(self.sessions[index].summary.as_ref());
+                // Start at the message a search result pointed to.
+                if let Some(line) = reading.focus.and_then(|block| reading.line_of_block(block)) {
                     reading.list.scroll_to(ListOffset {
-                        item_ix: block + 1,
+                        item_ix: line,
                         offset_in_item: px(0.),
                     });
                 }
-                reading.blocks = Some(blocks);
             }
             Err(err) => reading.error = Some(format!("{err:#}")),
         }
         cx.notify();
+    }
+
+    /// Cut the open transcript into steps again, after its summary changed.
+    pub(super) fn regroup_transcript(&mut self, index: usize) {
+        if let Some(reading) = self.reading.as_mut().filter(|r| r.index == index) {
+            if reading.blocks.is_some() {
+                reading.group(self.sessions[index].summary.as_ref());
+            }
+        }
     }
 
     pub(super) fn close_transcript(&mut self, cx: &mut Context<Self>) {
@@ -107,14 +293,59 @@ impl Home {
         cx.notify();
     }
 
-    fn toggle_tools(&mut self, row: usize, cx: &mut Context<Self>) {
+    fn toggle_tools(&mut self, block: usize, cx: &mut Context<Self>) {
         let Some(reading) = self.reading.as_mut() else {
             return;
         };
-        if !reading.expanded.remove(&row) {
-            reading.expanded.insert(row);
+        if !reading.expanded.remove(&block) {
+            reading.expanded.insert(block);
         }
-        reading.list.splice(row..row + 1, 1);
+        if let Some(line) = reading.line_of_block(block) {
+            reading.list.splice(line..line + 1, 1);
+        }
+        cx.notify();
+    }
+
+    fn toggle_step(&mut self, step: usize, cx: &mut Context<Self>) {
+        if let Some(reading) = self.reading.as_mut() {
+            reading.cursor = Some(step);
+            reading.toggle_step(step);
+            cx.notify();
+        }
+    }
+
+    /// Open or close the step the bracket keys are on; the first, if none.
+    pub(super) fn toggle_current_step(&mut self, cx: &mut Context<Self>) {
+        let Some(reading) = self.reading.as_ref().filter(|r| !r.steps.is_empty()) else {
+            return;
+        };
+        self.toggle_step(reading.cursor.unwrap_or(0), cx);
+    }
+
+    /// Move to the next or previous step and bring its heading to the top.
+    pub(super) fn move_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(reading) = self.reading.as_mut().filter(|r| !r.steps.is_empty()) else {
+            return;
+        };
+        let last = reading.steps.len() as isize - 1;
+        let next = match reading.cursor {
+            Some(at) => (at as isize + delta).clamp(0, last),
+            None if delta > 0 => 0,
+            None => last,
+        } as usize;
+        let previous = reading.cursor.replace(next);
+        // Both headings change, so the list has to draw them again.
+        for step in [previous, Some(next)].into_iter().flatten() {
+            if let Some(line) = reading.line_of_step(step) {
+                reading.list.splice(line..line + 1, 1);
+            }
+        }
+        if let Some(line) = reading.line_of_step(next) {
+            reading.list.scroll_to(ListOffset {
+                item_ix: line,
+                offset_in_item: px(0.),
+            });
+        }
         cx.notify();
     }
 
@@ -124,6 +355,11 @@ impl Home {
             return div();
         };
         let fill = t.fill;
+        let keys = if reading.steps.is_empty() {
+            "esc back   ↵ copy resume"
+        } else {
+            "esc back   [ ] step   o open   ↵ copy resume"
+        };
         div()
             .flex_1()
             .min_h(px(0.))
@@ -157,7 +393,7 @@ impl Home {
                                 .font_family(MONO_FONT)
                                 .text_size(px(11.))
                                 .text_color(t.ink3)
-                                .child("esc back   ↵ copy resume"),
+                                .child(keys),
                         ),
                 ),
             )
@@ -180,8 +416,9 @@ impl Home {
             return div().into_any_element();
         };
         let session = &self.sessions[reading.index];
+        let line = reading.lines.get(ix).copied();
 
-        if ix == 0 {
+        if let Some(Line::Head) = line {
             let mut head = div()
                 .flex()
                 .flex_col()
@@ -221,17 +458,99 @@ impl Home {
                         .child(summary.summary.clone()),
                 );
             }
+            if !reading.steps.is_empty() {
+                head = head.child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(t.ink3)
+                        .child("Grouped by the steps in the summary. Click a step to read the turns behind it."),
+                );
+            }
+            // With steps, each heading draws its own rule.
+            if !reading.steps.is_empty() {
+                head = head.mb(px(0.)).border_b_0();
+            }
             return centered(head).into_any_element();
         }
 
-        let Some(blocks) = &reading.blocks else {
+        if let Some(Line::Step(i)) = line {
+            let Some(step) = reading.steps.get(i) else {
+                return div().into_any_element();
+            };
+            let open = reading.open.contains(&i);
+            let at_cursor = reading.cursor == Some(i);
+            let covered = reading
+                .blocks
+                .as_deref()
+                .and_then(|blocks| blocks.get(step.blocks.clone()))
+                .unwrap_or(&[]);
+            let about = match covered.is_empty() {
+                true => "nothing recorded".to_string(),
+                false => step_facts(covered),
+            };
+            let fill = t.fill;
+            return centered(
+                div()
+                    .id(("step", i))
+                    .flex()
+                    .gap(px(14.))
+                    .px(px(20.))
+                    .py(px(15.))
+                    .border_t_1()
+                    .border_color(t.line)
+                    .cursor_pointer()
+                    .when(at_cursor, |el| el.bg(fill.opacity(0.6)))
+                    .hover(move |style| style.bg(fill.opacity(0.6)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_step(i, cx)))
+                    .child(
+                        div()
+                            .w(px(44.))
+                            .flex_shrink_0()
+                            .pt(px(2.))
+                            .font_family(MONO_FONT)
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if open { t.accent } else { t.ink3 })
+                            .child(format!(
+                                "{} {}",
+                                if open { "▾" } else { "▸" },
+                                step.number.map_or("+".to_string(), |n| n.to_string())
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .line_height(px(22.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(step.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .font_family(MONO_FONT)
+                                    .text_size(px(12.))
+                                    .text_color(t.ink3)
+                                    .child(about),
+                            ),
+                    ),
+            )
+            .into_any_element();
+        }
+
+        let Some(Line::Block(at)) = line else {
             let status = match &reading.error {
                 Some(error) => format!("The session could not be read: {error}"),
                 None => "Reading the session…".to_string(),
             };
             return centered(div().py(px(16.)).text_color(t.ink3).child(status)).into_any_element();
         };
-        let Some(block) = blocks.get(ix - 1) else {
+        let Some(block) = reading.blocks.as_ref().and_then(|blocks| blocks.get(at)) else {
             return div().into_any_element();
         };
 
@@ -257,7 +576,7 @@ impl Home {
             )
             .into_any_element(),
             Block::Tools(calls) => {
-                let open = reading.expanded.contains(&ix);
+                let open = reading.expanded.contains(&at);
                 let fill = t.fill;
                 let mut column = div().flex().flex_col().items_start().gap(px(8.)).child(
                     div()
@@ -275,7 +594,7 @@ impl Home {
                         .text_color(t.ink3)
                         .cursor_pointer()
                         .hover(move |style| style.bg(fill))
-                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_tools(ix, cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_tools(at, cx)))
                         .child(if open { "▾" } else { "▸" })
                         .child(transcript::tools_line(calls)),
                 );
@@ -314,7 +633,7 @@ impl Home {
                 turn("tools", column, &t).into_any_element()
             }
         };
-        if reading.focus == Some(ix - 1) {
+        if reading.focus == Some(at) {
             // The message the search led here for.
             return centered(
                 div()
