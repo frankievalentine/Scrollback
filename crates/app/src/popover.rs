@@ -4,7 +4,8 @@
 
 use crate::home::{self, clock, day_label, facts, label, outcome_mark, resume_command};
 use crate::open_main;
-use crate::theme::{Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, Theme, MONO_FONT, UI_FONT};
+use crate::ui::{self, OneLine, Reachable};
 use gpui::{
     div, point, prelude::*, px, size, svg, App, Bounds, ClipboardItem, Context, Div, FocusHandle,
     FontWeight, Global, KeyDownEvent, Pixels, ScrollHandle, SharedString, Window, WindowBounds,
@@ -145,6 +146,8 @@ pub struct Popover {
     /// Whether summaries may be written without being asked.
     auto: bool,
     scroll: ScrollHandle,
+    detail_scroll: ScrollHandle,
+    measured: ui::Measured,
     pub focus: FocusHandle,
 }
 
@@ -178,6 +181,8 @@ impl Popover {
                     && summarize::claude_binary().is_some()
             },
             scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
+            measured: Default::default(),
             focus: cx.focus_handle(),
         };
         popover.recompute();
@@ -343,7 +348,7 @@ impl Popover {
         if let Some(summary) = &session.summary {
             text.push_str(&format!("\n\n{}", summary.summary));
             if !summary.open_ends.is_empty() {
-                text.push_str("\n\nLeft open:");
+                text.push_str("\n\nOpen ends:");
                 for end in &summary.open_ends {
                     text.push_str(&format!("\n- {end}"));
                 }
@@ -371,6 +376,9 @@ impl Popover {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if ui::control_key(event, &self.focus, window, cx) {
+            return;
+        }
         let keystroke = &event.keystroke;
         let mods = keystroke.modifiers;
         match keystroke.key.as_str() {
@@ -425,7 +433,7 @@ impl Popover {
                 .flex()
                 .items_center()
                 .gap(px(1.))
-                .child(div().min_w(px(0.)).truncate().child(self.query.clone()))
+                .child(div().min_w(px(0.)).one_line().child(self.query.clone()))
                 .child(caret)
         };
         div()
@@ -437,7 +445,7 @@ impl Popover {
             .gap(px(12.))
             .border_b_1()
             .border_color(t.line)
-            .text_size(px(16.))
+            .text_size(px(text::LEAD))
             .child(svg().path("search.svg").size(px(16.)).flex_shrink_0().text_color(t.ink3))
             .child(div().flex_1().min_w(px(0.)).child(text))
     }
@@ -466,7 +474,7 @@ impl Popover {
                 div()
                     .px(px(10.))
                     .py(px(8.))
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .text_color(t.ink3)
                     .child(if self.sessions.is_empty() { "No sessions yet." } else { "Nothing matches." }),
             );
@@ -517,13 +525,16 @@ impl Popover {
                             .py(px(8.))
                             .rounded(px(8.))
                             .cursor_pointer()
+                            .border_l_2()
+                            .border_color(if selected { t.accent } else { t.accent.opacity(0.) })
                             .when(selected, |el| el.bg(fill))
                             .hover(move |style| style.bg(fill))
                             .on_click(cx.listener(move |this, _, _, cx| this.select(selection, cx)))
                             .child(
                                 div()
-                                    .truncate()
-                                    .text_size(px(13.))
+                                    .w_full()
+                                    .one_line()
+                                    .text_size(px(text::SMALL))
                                     .when(selected, |el| el.font_weight(FontWeight::MEDIUM))
                                     .child(session.display_title().to_string()),
                             )
@@ -533,10 +544,10 @@ impl Popover {
                                     .items_center()
                                     .gap(px(7.))
                                     .font_family(MONO_FONT)
-                                    .text_size(px(11.))
+                                    .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(mark)
-                                    .child(div().min_w(px(0.)).truncate().child(format!(
+                                    .child(div().min_w(px(0.)).one_line().child(format!(
                                         "{} · {} · {}",
                                         session.origin.name(),
                                         session.project(),
@@ -570,10 +581,10 @@ impl Popover {
             .child(facts(session, t, true))
             .child(
                 div()
-                    .text_size(px(19.))
+                    .text_size(px(text::TITLE))
                     .line_height(px(25.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .line_clamp(3)
+                    .line_clamp(3).text_ellipsis()
                     .child(session.display_title().to_string()),
             );
         let key = session.key();
@@ -584,7 +595,7 @@ impl Popover {
                 top = top
                     .child(
                         div()
-                            .text_size(px(15.))
+                            .text_size(px(text::LEAD))
                             .line_height(px(23.))
                             .text_color(t.ink2)
                             .child(summary.summary.clone()),
@@ -592,13 +603,13 @@ impl Popover {
                     .child(div().flex().items_center().gap(px(12.)).child(outcome_mark(summary, true, t)).children(
                         session.summary_stale.then(|| {
                             div()
-                                .text_size(px(12.))
+                                .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
                                 .child(if writing { "Updating…" } else { "Written before the session moved on." })
                         }),
                     ));
                 if !summary.open_ends.is_empty() {
-                    sections.push(listing("Left open", &summary.open_ends, false, t));
+                    sections.push(listing("Open ends", &summary.open_ends, false, t));
                 }
                 if !summary.happened.is_empty() {
                     sections.push(listing("What happened", &summary.happened, true, t));
@@ -617,7 +628,7 @@ impl Popover {
                         .gap(px(8.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(px(text::SMALL))
                                 .text_color(t.ink2)
                                 .child(format!("The summary could not be written: {error}")),
                         )
@@ -648,7 +659,7 @@ impl Popover {
                                 div()
                                     .line_height(px(22.))
                                     .text_color(t.ink2)
-                                    .line_clamp(6)
+                                    .line_clamp(6).text_ellipsis()
                                     .child(session.first_prompt.clone()),
                             ),
                     );
@@ -684,15 +695,23 @@ impl Popover {
         // The summary scrolls if it is long; the buttons stay put below it.
         pane.child(
             div()
-                .id("popover-detail")
+                .relative()
                 .flex_1()
                 .min_h(px(0.))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(18.))
-                .child(top)
-                .children(sections),
+                .child(
+                    div()
+                        .id("popover-detail")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.detail_scroll)
+                        .flex()
+                        .flex_col()
+                        .gap(px(18.))
+                        .pr(px(10.))
+                        .child(top)
+                        .children(sections),
+                )
+                .children(ui::scrollbar(&self.detail_scroll, t)),
         )
         .child(actions)
     }
@@ -701,16 +720,21 @@ impl Popover {
 impl Render for Popover {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::for_appearance(window.appearance());
+        ui::settle(&[&self.scroll, &self.detail_scroll], &self.measured, window, cx);
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
+            )
             .size_full()
             .flex()
             .flex_col()
             .bg(t.raise)
             .text_color(t.ink)
             .font_family(UI_FONT)
-            .text_size(px(14.))
+            .text_size(px(text::BODY))
             .line_height(px(20.))
             .child(self.search_row(&t))
             .child(
@@ -718,7 +742,14 @@ impl Render for Popover {
                     .flex_1()
                     .min_h(px(0.))
                     .flex()
-                    .child(self.list(&t, cx))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_shrink_0()
+                            .h_full()
+                            .child(self.list(&t, cx))
+                            .children(ui::scrollbar(&self.scroll, &t)),
+                    )
                     .child(self.detail(&t, cx)),
             )
             .child(
@@ -731,7 +762,7 @@ impl Render for Popover {
                     .border_t_1()
                     .border_color(t.line)
                     .font_family(MONO_FONT)
-                    .text_size(px(11.))
+                    .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child("↑↓ move")
                     .child("type to search")
@@ -779,15 +810,17 @@ fn action(
     let fill = t.fill;
     div()
         .id(id)
+        .reachable(t)
         .h(px(36.))
         .px(px(14.))
         .flex()
         .items_center()
         .gap(px(10.))
         .rounded(px(8.))
-        .text_size(px(13.))
+        .text_size(px(text::SMALL))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
+        .active(|style| style.opacity(0.75))
         .when(primary, |el| el.bg(t.accent).text_color(t.on_accent).hover(|style| style.opacity(0.9)))
         .when(!primary, |el| el.border_1().border_color(t.line).hover(move |style| style.bg(fill)))
         .child(name.into())
@@ -795,7 +828,7 @@ fn action(
             el.child(
                 div()
                     .font_family(MONO_FONT)
-                    .text_size(px(11.))
+                    .text_size(px(text::CAPTION))
                     .when(!primary, |el| el.text_color(t.ink3))
                     .child(key),
             )

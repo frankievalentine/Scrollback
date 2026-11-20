@@ -4,7 +4,8 @@
 
 use super::reader::centered;
 use super::{clock, compact_number, day_label, label, logo, Home, View, LIMIT_PAUSE};
-use crate::theme::{Theme, MONO_FONT};
+use crate::theme::{text, Theme, MONO_FONT};
+use crate::ui::{self, OneLine, Reachable};
 use chrono::Local;
 use gpui::{
     div, point, prelude::*, px, relative, rgba, BoxShadow, Context, Div, FontWeight, ListOffset,
@@ -242,11 +243,18 @@ impl Home {
             )
             .child(self.recent_edits(t, cx));
         div()
-            .id("activity")
+            .relative()
             .flex_1()
             .min_h(px(0.))
-            .overflow_y_scroll()
-            .child(centered(column))
+            .child(
+                div()
+                    .id("activity")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.activity_scroll)
+                    .child(centered(column)),
+            )
+            .children(ui::scrollbar(&self.activity_scroll, t))
     }
 
     fn activity_header(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
@@ -262,12 +270,14 @@ impl Home {
             ranges = ranges.child(
                 div()
                     .id(("range", days as usize))
+                    .reachable(t)
                     .h(px(28.))
                     .px(px(12.))
                     .flex()
                     .items_center()
-                    .rounded(px(7.))
-                    .text_size(px(13.))
+                    // The track is rounded 9 and pads by 3.
+                    .rounded(px(6.))
+                    .text_size(px(text::SMALL))
                     .text_color(if active { t.ink } else { t.ink2 })
                     .cursor_pointer()
                     .when(active, |el| {
@@ -290,7 +300,7 @@ impl Home {
             .child(
                 div()
                     .pl(px(4.))
-                    .text_size(px(18.))
+                    .text_size(px(text::TITLE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Activity"),
             )
@@ -303,7 +313,7 @@ impl Home {
         let current = self.digest_is_current();
         let quiet = |text: &str| {
             div()
-                .text_size(px(15.))
+                .text_size(px(text::LEAD))
                 .line_height(px(24.))
                 .text_color(t.ink3)
                 .child(text.to_string())
@@ -317,7 +327,7 @@ impl Home {
         written = match &self.digest {
             Some(digest) => written.child(
                 div()
-                    .text_size(px(17.))
+                    .text_size(px(text::TITLE))
                     .line_height(px(27.))
                     .child(digest.text.clone()),
             ),
@@ -335,7 +345,7 @@ impl Home {
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .text_size(px(12.))
+                .text_size(px(text::CAPTION))
                 .text_color(t.ink3);
             if self.digest_busy {
                 if self.digest.is_some() {
@@ -348,6 +358,7 @@ impl Home {
                 state = state.child(
                     div()
                         .id("write-digest")
+                    .reachable(t)
                         .h(px(30.))
                         .px(px(12.))
                         .flex()
@@ -355,7 +366,7 @@ impl Home {
                         .rounded(px(7.))
                         .border_1()
                         .border_color(t.line)
-                        .text_size(px(13.))
+                        .text_size(px(text::SMALL))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(t.ink)
                         .cursor_pointer()
@@ -369,7 +380,7 @@ impl Home {
         if let Some(error) = &self.digest_error {
             written = written.child(
                 div()
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .text_color(t.ink2)
                     .child(format!("It could not be written: {error}")),
             );
@@ -417,6 +428,7 @@ impl Home {
             open = open.child(
                 div()
                     .id(("open-end", i))
+                    .reachable(t)
                     .flex()
                     .gap(px(14.))
                     .mx(px(-8.))
@@ -431,13 +443,14 @@ impl Home {
                             .w(px(150.))
                             .flex_shrink_0()
                             .pt(px(1.))
-                            .truncate()
+                            .one_line()
                             .font_family(MONO_FONT)
-                            .text_size(px(12.))
+                            .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(end.project.clone()),
                     )
-                    .child(div().flex_1().min_w(px(0.)).child(end.text.clone())),
+                    .child(div().flex_1().min_w(px(0.)).child(end.text.clone()))
+                    .child(div().flex_shrink_0().text_color(t.ink3).child("›")),
             );
         }
         if a.open_ends.is_empty() {
@@ -450,7 +463,7 @@ impl Home {
             open = open.child(
                 div()
                     .pt(px(4.))
-                    .text_size(px(12.))
+                    .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child(format!("and {} more", a.open_ends.len() - shown)),
             );
@@ -491,6 +504,7 @@ impl Home {
             section = section.child(
                 div()
                     .id(("edit", i))
+                    .reachable(t)
                     .group("edit")
                     .flex()
                     .items_center()
@@ -499,16 +513,17 @@ impl Home {
                     .py(px(11.))
                     .when(i + 1 < edits.len(), |el| el.border_b_1().border_color(t.line))
                     .cursor_pointer()
+                    .tooltip(ui::tip(format!("{}/{}", edit.project, edit.file)))
                     .on_click(cx.listener(move |this, _, _, cx| this.show_session(&key, cx)))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .truncate()
+                            .one_line()
                             .font_family(MONO_FONT)
-                            .text_size(px(13.))
+                            .text_size(px(text::SMALL))
                             .group_hover("edit", move |style| style.text_color(accent))
-                            .child(format!("{}/{}", edit.project, edit.file)),
+                            .child(ui::middle(&format!("{}/{}", edit.project, edit.file), 58)),
                     )
                     .child(
                         div()
@@ -516,12 +531,12 @@ impl Home {
                             .max_w(px(420.))
                             .flex()
                             .gap(px(6.))
-                            .text_size(px(12.))
+                            .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(
                                 div()
                                     .min_w(px(0.))
-                                    .truncate()
+                                    .one_line()
                                     .child(format!("in {}", edit.title)),
                             )
                             .child(div().flex_shrink_0().child(format!(
@@ -529,7 +544,8 @@ impl Home {
                                 day_label(edit.updated_ms).to_lowercase(),
                                 clock(edit.updated_ms)
                             ))),
-                    ),
+                    )
+                    .child(div().flex_shrink_0().text_color(t.ink3).child("›")),
             );
         }
         section
@@ -578,17 +594,17 @@ fn total(name: &'static str, value: String, note: Option<String>, t: &Theme) -> 
         .flex()
         .flex_col()
         .gap(px(4.))
-        .child(div().text_size(px(12.)).text_color(t.ink3).child(name))
+        .child(div().text_size(px(text::CAPTION)).text_color(t.ink3).child(name))
         .child(
             div()
-                .text_size(px(24.))
+                .text_size(px(text::DISPLAY))
                 .line_height(px(30.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(value),
         )
         .children(note.map(|note| {
             div()
-                .text_size(px(12.))
+                .text_size(px(text::CAPTION))
                 .line_height(px(17.))
                 .text_color(t.ink3)
                 .child(note)
@@ -619,7 +635,7 @@ fn by_origin(a: &Activity, t: &Theme) -> Div {
                     div()
                         .w(px(104.))
                         .flex_shrink_0()
-                        .text_size(px(13.))
+                        .text_size(px(text::SMALL))
                         .child(share.origin.name()),
                 )
                 .child(
@@ -638,7 +654,7 @@ fn by_origin(a: &Activity, t: &Theme) -> Div {
                         .flex()
                         .justify_end()
                         .font_family(MONO_FONT)
-                        .text_size(px(12.))
+                        .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
                         .child(format!("{} · {}", share.sessions, hours_label(share.active_ms))),
                 ),
@@ -684,7 +700,7 @@ fn over_time(a: &Activity, t: &Theme) -> Div {
                     el.child(
                         div()
                             .font_family(MONO_FONT)
-                            .text_size(px(11.))
+                            .text_size(px(text::CAPTION))
                             .line_height(px(14.))
                             .text_color(t.ink3)
                             .child(bucket.sessions.to_string()),
@@ -703,13 +719,18 @@ fn over_time(a: &Activity, t: &Theme) -> Div {
     let mut axis = div()
         .flex()
         .font_family(MONO_FONT)
-        .text_size(px(11.))
+        .text_size(px(text::CAPTION))
         .text_color(t.ink3);
     if a.buckets.len() <= 7 {
         // Room for a weekday under every bar.
         axis = axis.gap(px(10.));
         for bucket in &a.buckets {
-            let day: String = bucket.first_day.format("%a").to_string().chars().take(2).collect();
+            // Today's bar is named as well as coloured.
+            let day: String = if bucket.current {
+                "today".to_string()
+            } else {
+                bucket.first_day.format("%a").to_string().chars().take(2).collect()
+            };
             axis = axis.child(div().flex_1().flex().justify_center().child(day));
         }
     } else {

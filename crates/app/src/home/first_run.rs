@@ -3,7 +3,8 @@
 //! look. Nothing is summarised until this screen has been answered.
 
 use super::{facts, label, logo, Home};
-use crate::theme::{Theme, MONO_FONT};
+use crate::theme::{text, Theme, MONO_FONT};
+use crate::ui::{self, OneLine, Reachable};
 use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent};
 use scrollback_core::{sources, Harness, Origin};
 
@@ -83,9 +84,9 @@ impl Home {
         let found = self.found();
         let present = found.iter().filter(|f| f.present).count();
         let heading = match present {
-            0 => "No agents found on this Mac".to_string(),
-            1 => "Found 1 agent on this Mac".to_string(),
-            n => format!("Found {n} agents on this Mac"),
+            0 => "No sessions found on this Mac".to_string(),
+            1 => "Found sessions from 1 source".to_string(),
+            n => format!("Found sessions from {n} sources"),
         };
 
         // A row for each one found; the rest are named in a single line, so
@@ -103,7 +104,7 @@ impl Home {
             harnesses = harnesses.child(
                 div()
                     .pt(px(10.))
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .text_color(t.ink3)
                     .child(format!("Also looked for, and did not find: {}.", missing.join(", "))),
             );
@@ -136,7 +137,7 @@ impl Home {
             choice = choice.child(
                 div()
                     .pt(px(2.))
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .line_height(px(19.))
                     .text_color(t.ink2)
                     .child("The claude command was not found, so summaries cannot be written yet."),
@@ -151,6 +152,7 @@ impl Home {
             .child(
                 div()
                     .id("open-scrollback")
+                    .reachable(t)
                     .h(px(40.))
                     .px(px(18.))
                     .flex()
@@ -158,7 +160,7 @@ impl Home {
                     .rounded(px(8.))
                     .bg(t.accent)
                     .text_color(t.on_accent)
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.9))
@@ -167,7 +169,7 @@ impl Home {
             )
             .child(
                 div()
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .text_color(t.ink3)
                     .child("You can change this later from the sidebar."),
             );
@@ -185,14 +187,14 @@ impl Home {
                     .gap(px(8.))
                     .child(
                         div()
-                            .text_size(px(26.))
+                            .text_size(px(text::DISPLAY))
                             .line_height(px(32.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(heading),
                     )
                     .child(
                         div()
-                            .text_size(px(15.))
+                            .text_size(px(text::LEAD))
                             .line_height(px(22.))
                             .text_color(t.ink2)
                             .child(
@@ -222,11 +224,12 @@ impl Home {
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("scrollback")),
             )
             .child(
+                div().relative().flex_1().min_h(px(0.)).child(
                 div()
                     .id("first-run")
-                    .flex_1()
-                    .min_h(px(0.))
+                    .size_full()
                     .overflow_y_scroll()
+                    .track_scroll(&self.first_run_scroll)
                     .child(
                         div().w_full().flex().justify_center().child(
                             div()
@@ -243,7 +246,8 @@ impl Home {
                                 .child(left)
                                 .child(self.recent_card(t)),
                         ),
-                    ),
+                    ))
+                    .children(ui::scrollbar(&self.first_run_scroll, t)),
             )
     }
 
@@ -262,6 +266,7 @@ impl Home {
         let (accent, raise) = (t.accent, t.raise);
         div()
             .id(id)
+                    .reachable(t)
             .flex()
             .gap(px(12.))
             .px(px(16.))
@@ -300,7 +305,7 @@ impl Home {
                     .child(div().font_weight(FontWeight::MEDIUM).child(title))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(text::SMALL))
                             .line_height(px(19.))
                             .text_color(t.ink2)
                             .child(text),
@@ -327,7 +332,7 @@ impl Home {
                 div()
                     .py(px(16.))
                     .text_color(t.ink3)
-                    .child("Nothing yet. A session appears here once a harness has recorded one."),
+                    .child("Nothing yet. A session appears here once one of the sources has recorded it."),
             );
         }
         for session in self.sessions.iter().take(RECENT_SHOWN) {
@@ -346,13 +351,13 @@ impl Home {
                     .border_color(t.line)
                     .child(
                         div()
-                            .text_size(px(15.))
+                            .text_size(px(text::LEAD))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .line_clamp(2)
+                            .line_clamp(2).text_ellipsis()
                             .child(session.display_title().to_string()),
                     )
                     .when(!blurb.is_empty(), |el| {
-                        el.child(div().text_color(t.ink2).line_clamp(2).child(blurb))
+                        el.child(div().text_color(t.ink2).line_clamp(2).text_ellipsis().child(blurb))
                     })
                     .child(facts(session, t, true)),
             );
@@ -369,7 +374,7 @@ impl Home {
         card.child(
             div()
                 .pt(px(16.))
-                .text_size(px(13.))
+                .text_size(px(text::SMALL))
                 .line_height(px(19.))
                 .text_color(t.ink3)
                 .child(format!(
@@ -381,7 +386,7 @@ impl Home {
 }
 
 fn harness_row(f: &Found, t: &Theme) -> Div {
-    let quiet = |text: &'static str| div().text_size(px(13.)).text_color(t.ink3).child(text);
+    let quiet = |text: &'static str| div().text_size(px(text::SMALL)).text_color(t.ink3).child(text);
     let status = match (f.present, f.sessions) {
         (false, _) => quiet("Not found"),
         (true, 0) => quiet("No sessions yet"),
@@ -389,7 +394,7 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
             .flex()
             .items_center()
             .gap(px(8.))
-            .text_size(px(13.))
+            .text_size(px(text::SMALL))
             .text_color(t.ink2)
             .child(svg().path("check.svg").size(px(14.)).flex_shrink_0().text_color(t.ink))
             .child(if n == 1 { "1 session".to_string() } else { format!("{n} sessions") }),
@@ -415,11 +420,11 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
                 )
                 .child(
                     div()
-                        .truncate()
+                        .one_line()
                         .font_family(MONO_FONT)
-                        .text_size(px(12.))
+                        .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
-                        .child(f.place.clone()),
+                        .child(ui::middle(&f.place, 44)),
                 ),
         )
         .child(status.flex_shrink_0())

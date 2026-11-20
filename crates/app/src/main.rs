@@ -6,6 +6,7 @@ mod popover;
 mod settings;
 mod theme;
 mod tray;
+mod ui;
 
 use gpui::{
     point, prelude::*, px, size, App, Application, AssetSource, Bounds, Global, SharedString,
@@ -226,7 +227,16 @@ fn main() {
                         None => opened.read_with(cx, |home, _| home.dev_state()),
                     }
                     .unwrap_or_else(|_| "window closed".to_string());
-                    eprintln!("key {key}: handled={handled} {state}");
+                    // Whether the keyboard is on the window itself or has
+                    // moved to one of its controls.
+                    let home_focus = opened.read_with(cx, |home, _| home.focus.clone()).ok();
+                    let on_control = cx
+                        .update_window(opened.into(), |_, window, cx| {
+                            window.focused(cx).is_some()
+                                && !home_focus.as_ref().is_some_and(|f| f.is_focused(window))
+                        })
+                        .unwrap_or(false);
+                    eprintln!("key {key}: handled={handled} on_control={on_control} {state}");
                 }
             })
             .detach();

@@ -2,7 +2,7 @@
 //! parsed into a small tree and drawn with headings, lists, code, tables and
 //! links instead of being shown as raw text.
 
-use crate::theme::{Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, Theme, MONO_FONT, UI_FONT};
 use gpui::{
     div, prelude::*, px, AnyElement, Div, Font, FontStyle, FontWeight, Hsla, InteractiveText,
     SharedString, StrikethroughStyle, StyledText, TextRun, UnderlineStyle,
@@ -263,9 +263,9 @@ fn column(nodes: &[Node], t: &Theme, color: Hsla, ids: &mut Ids) -> Div {
             Node::Paragraph(text) => rich(text, t, color, FontWeight::NORMAL, ids),
             Node::Heading(level, text) => {
                 let size = match level {
-                    1 => 18.,
-                    2 => 16.,
-                    _ => 14.,
+                    1 => text::TITLE,
+                    2 => text::LEAD,
+                    _ => text::BODY,
                 };
                 div()
                     .pt(px(6.))
@@ -282,7 +282,7 @@ fn column(nodes: &[Node], t: &Theme, color: Hsla, ids: &mut Ids) -> Div {
                 .border_1()
                 .border_color(t.line)
                 .font_family(MONO_FONT)
-                .text_size(px(12.))
+                .text_size(px(text::CAPTION))
                 .line_height(px(18.))
                 .text_color(t.ink)
                 .child(SharedString::from(code.clone()))
@@ -329,7 +329,7 @@ fn column(nodes: &[Node], t: &Theme, color: Hsla, ids: &mut Ids) -> Div {
                     }
                     line
                 };
-                let mut table = div().flex().flex_col().text_size(px(13.)).line_height(px(19.));
+                let mut table = div().flex().flex_col().text_size(px(text::SMALL)).line_height(px(19.));
                 if !head.is_empty() {
                     table = table.child(row(head, FontWeight::SEMIBOLD, ids));
                 }

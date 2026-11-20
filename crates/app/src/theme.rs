@@ -7,6 +7,9 @@ pub struct Theme {
     pub rail: Hsla,
     pub raise: Hsla,
     pub fill: Hsla,
+    /// The track of a switch that is off. Dark enough against the page
+    /// (over 3:1) that an off switch is still plainly a control.
+    pub control_off: Hsla,
     /// The chosen option of a segmented control, which sits on `fill`.
     pub segment: Hsla,
     pub line: Hsla,
@@ -16,6 +19,24 @@ pub struct Theme {
     pub accent: Hsla,
     pub on_accent: Hsla,
     pub card_shadow: Vec<BoxShadow>,
+}
+
+/// The type scale. Every text size in the app is one of these.
+pub mod text {
+    /// Hints, counts, key labels and small facts.
+    pub const CAPTION: f32 = 12.;
+    /// Secondary text and buttons.
+    pub const SMALL: f32 = 13.;
+    /// Running text.
+    pub const BODY: f32 = 14.;
+    /// Summaries and other text meant to be read first.
+    pub const LEAD: f32 = 15.;
+    /// Section and row titles.
+    pub const TITLE: f32 = 18.;
+    /// A session's title.
+    pub const HEADLINE: f32 = 21.;
+    /// Headline figures and the first-run heading.
+    pub const DISPLAY: f32 = 24.;
 }
 
 pub const UI_FONT: &str = ".SystemUIFont";
@@ -66,6 +87,7 @@ impl Theme {
             rail: rgb(0xF6F6F4).into(),
             raise: rgb(0xFFFFFF).into(),
             fill: rgb(0xEEEEEB).into(),
+            control_off: rgb(0x8C8E93).into(),
             segment: rgb(0xFFFFFF).into(),
             line: rgb(0xE4E4E1).into(),
             ink: rgb(0x17181A).into(),
@@ -87,6 +109,7 @@ impl Theme {
             rail: rgb(0x0F1012).into(),
             raise: rgb(0x1C1E22).into(),
             fill: rgb(0x24262B).into(),
+            control_off: rgb(0x787A80).into(),
             segment: rgb(0x3A3D45).into(),
             line: rgb(0x2A2C32).into(),
             ink: rgb(0xECECEA).into(),

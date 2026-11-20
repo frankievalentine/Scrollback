@@ -7,7 +7,8 @@ mod reader;
 
 use crate::app_menu::{CopyResume, ReadTranscript, Reindex, ShowActivity, ShowSessions, WriteSummary};
 use crate::settings::{self, Settings, Tab};
-use crate::theme::{claude_orange, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, claude_orange, Theme, MONO_FONT, UI_FONT};
+use crate::ui::{self, OneLine, Reachable};
 use reader::Reading;
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
@@ -51,7 +52,10 @@ pub fn load() -> (Vec<Session>, SharedString) {
             );
             (sessions, status.into())
         }
-        Err(err) => (Vec::new(), format!("Index error: {err:#}").into()),
+        Err(err) => (
+            Vec::new(),
+            format!("Could not read the index: {err:#}. Press ⌘R to try again.").into(),
+        ),
     }
 }
 
@@ -90,6 +94,11 @@ pub struct Home {
     /// set when the selected one has been opened into its full card.
     expanded: bool,
     copied: Option<usize>,
+    /// Scroll positions, kept so each area can draw a scrollbar.
+    sidebar_scroll: gpui::ScrollHandle,
+    activity_scroll: gpui::ScrollHandle,
+    first_run_scroll: gpui::ScrollHandle,
+    measured: ui::Measured,
     /// Whether the search caret is in the lit half of its blink.
     caret_lit: bool,
     /// When a key last changed the search, so the caret stays lit while typing.
@@ -161,6 +170,10 @@ impl Home {
             selected: None,
             expanded: false,
             copied: None,
+            sidebar_scroll: gpui::ScrollHandle::new(),
+            activity_scroll: gpui::ScrollHandle::new(),
+            first_run_scroll: gpui::ScrollHandle::new(),
+            measured: Default::default(),
             caret_lit: true,
             typed_at: Instant::now(),
             window_active: true,
@@ -592,7 +605,10 @@ impl Home {
         }))
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if ui::control_key(event, &self.focus, window, cx) {
+            return;
+        }
         // Keys this window acts on stop here, so they are not also offered to
         // the system's text input. Command shortcuts belong to the menu bar
         // and arrive as its commands; only command-backspace is handled here.
@@ -642,7 +658,10 @@ impl Home {
         }
         match keystroke.key.as_str() {
             "right" => self.open_transcript(cx),
-            "tab" => self.toggle_expanded(cx),
+            // Tab moves between controls, so opening a search result into
+            // its full card is on the space bar when nothing is being typed
+            // mid-word: shift-space, to keep plain space for the search.
+            "space" if mods.shift => self.toggle_expanded(cx),
             "down" => self.move_selection(1, cx),
             "up" => self.move_selection(-1, cx),
             // On a message result, enter goes to that message.
@@ -733,7 +752,7 @@ impl Home {
                         cx.notify();
                     }))
                     .child(logo(origin, t, 16.))
-                    .child(div().flex_1().min_w(px(0.)).truncate().child(origin.name()))
+                    .child(div().flex_1().min_w(px(0.)).one_line().child(origin.name()))
                     .child(count_badge(count, t)),
             );
         }
@@ -765,7 +784,7 @@ impl Home {
                         this.pump_digest(cx);
                         cx.notify();
                     }))
-                    .child(div().flex_1().min_w(px(0.)).truncate().child(name))
+                    .child(div().flex_1().min_w(px(0.)).one_line().child(name))
                     .child(count_badge(count, t)),
             );
         }
@@ -794,15 +813,23 @@ impl Home {
             // below stay in view however many sources and projects there are.
             .child(
                 div()
-                    .id("sidebar-lists")
+                    .relative()
                     .flex_1()
                     .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(22.))
-                    .child(harnesses)
-                    .child(projects),
+                    .child(
+                        div()
+                            .id("sidebar-lists")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.sidebar_scroll)
+                            .flex()
+                            .flex_col()
+                            .gap(px(22.))
+                            .child(harnesses)
+                            .child(projects),
+                    )
+                    // In the sidebar's own margin, clear of the counts.
+                    .children(ui::scrollbar(&self.sidebar_scroll, t).map(|bar| bar.right(px(-7.)))),
             )
             .child(
                 nav_row(t, false)
@@ -812,7 +839,7 @@ impl Home {
                     .child(
                         div()
                             .font_family(MONO_FONT)
-                            .text_size(px(11.))
+                            .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child("⌘,"),
                     ),
@@ -821,11 +848,11 @@ impl Home {
                 nav_row(t, false)
                     .id("auto-summarise")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_summarize(cx)))
-                    .child(div().flex_1().child("Auto-summarise"))
+                    .child(div().flex_1().child("Summarise automatically"))
                     .child(
                         div()
                             .font_family(MONO_FONT)
-                            .text_size(px(11.))
+                            .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(if self.config.auto_summarize { "on" } else { "off" }),
                     ),
@@ -834,7 +861,7 @@ impl Home {
                 div()
                     .px(px(10.))
                     .font_family(MONO_FONT)
-                    .text_size(px(11.))
+                    .text_size(px(text::CAPTION))
                     .line_height(px(17.))
                     .text_color(t.ink3)
                     .child(self.status.clone())
@@ -844,8 +871,13 @@ impl Home {
 
     /// A line about summary work in progress, when there is something to say.
     fn summary_status(&self) -> Option<String> {
-        if self.paused_until.is_some_and(|until| Instant::now() < until) {
-            return Some("summaries paused: plan limit reached".to_string());
+        if let Some(until) = self.paused_until.filter(|until| Instant::now() < *until) {
+            // Say when it resumes by itself and how to try sooner.
+            let resumes = Local::now() + chrono::Duration::from_std(until - Instant::now()).unwrap_or_default();
+            return Some(format!(
+                "summaries paused until {}: Claude plan limit reached. ⌘R tries again now.",
+                resumes.format("%H:%M")
+            ));
         }
         match self.busy.len() {
             0 if self.digest_busy => Some("writing the digest…".to_string()),
@@ -892,43 +924,45 @@ impl Home {
                 .flex()
                 .items_center()
                 .gap(px(1.))
-                .child(div().min_w(px(0.)).truncate().text_color(t.ink).child(self.query.clone()))
+                .child(div().min_w(px(0.)).one_line().text_color(t.ink).child(self.query.clone()))
                 .child(caret)
         } else {
             div().flex().items_center().gap(px(6.)).child(caret).child(
                 div()
                     .min_w(px(0.))
-                    .truncate()
+                    .one_line()
                     .text_color(t.ink3)
                     .child("Type to search sessions, projects and messages"),
             )
         };
         // A filter narrows every search, so it is shown where the search is.
         let filter = self.filter_words().map(|words| {
-            let line = t.line;
+            let fill = t.fill;
             div()
                 .id("clear-filters")
+                    .reachable(t)
                 .flex_shrink_0()
                 .h(px(26.))
                 .px(px(9.))
                 .flex()
                 .items_center()
                 .gap(px(7.))
-                .rounded(px(6.))
+                // The box is rounded 10 and pads the chip by 7.
+                .rounded(px(3.))
                 .bg(t.raise)
                 .border_1()
                 .border_color(t.line)
-                .text_size(px(12.))
+                .text_size(px(text::CAPTION))
                 .text_color(t.ink2)
                 .cursor_pointer()
-                .hover(move |style| style.bg(line))
+                .hover(move |style| style.bg(fill))
                 .on_click(cx.listener(|this, _, _, cx| this.clear_filters(cx)))
                 .child(format!("in {words}"))
                 .child(div().text_color(t.ink3).child("×"))
         });
         let hint = if searching {
             format!(
-                "{} sessions · {} messages · {:.1?}   tab expand",
+                "{} sessions · {} messages · {:.1?}   ⇧space expand",
                 self.hits.len(),
                 self.message_hits.len(),
                 self.search_time
@@ -958,7 +992,7 @@ impl Home {
                             div()
                                 .flex_shrink_0()
                                 .font_family(MONO_FONT)
-                                .text_size(px(11.))
+                                .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
                                 .child(hint),
                         ),
@@ -1079,8 +1113,10 @@ impl Home {
         let selected = self.selected == Some(selection);
         let fill = t.fill;
         let highlight = HighlightStyle {
-            color: Some(t.accent),
+            // Marked with weight and a tint; the accent colour itself is
+            // kept for things that can be acted on.
             font_weight: Some(FontWeight::BOLD),
+            background_color: Some(t.accent.opacity(0.18)),
             ..Default::default()
         };
         let text = StyledText::new(SharedString::from(hit.snippet.clone()))
@@ -1090,7 +1126,7 @@ impl Home {
             .flex()
             .items_center()
             .gap(px(8.))
-            .text_size(px(12.))
+            .text_size(px(text::CAPTION))
             .text_color(t.ink3);
         if let Some(session) = self.by_key.get(&hit.key).map(|&i| &self.sessions[i]) {
             origin = origin
@@ -1098,7 +1134,7 @@ impl Home {
                 .child(
                     div()
                         .min_w(px(0.))
-                        .truncate()
+                        .one_line()
                         .child(format!("in {}", session.display_title())),
                 )
                 .child(
@@ -1128,7 +1164,7 @@ impl Home {
                     .flex_shrink_0()
                     .pt(px(2.))
                     .font_family(MONO_FONT)
-                    .text_size(px(11.))
+                    .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child(if hit.from_user { "you" } else { "agent" }),
             )
@@ -1139,7 +1175,7 @@ impl Home {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(div().text_color(t.ink2).line_clamp(3).child(text))
+                    .child(div().text_color(t.ink2).line_clamp(3).text_ellipsis().child(text))
                     .child(origin),
             )
     }
@@ -1172,7 +1208,7 @@ impl Home {
                     .flex_shrink_0()
                     .pt(px(2.))
                     .font_family(MONO_FONT)
-                    .text_size(px(12.))
+                    .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child(clock(session.updated_ms)),
             )
@@ -1192,9 +1228,9 @@ impl Home {
                                 div()
                                     .flex_1()
                                     .min_w(px(0.))
-                                    .text_size(px(15.))
+                                    .text_size(px(text::LEAD))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .truncate()
+                                    .one_line()
                                     .child(title_text(
                                         session.display_title(),
                                         &found.title_matches,
@@ -1209,7 +1245,7 @@ impl Home {
                             ),
                     )
                     .when(!blurb.is_empty(), |el| {
-                        el.child(div().text_color(t.ink2).line_clamp(2).child(blurb))
+                        el.child(div().text_color(t.ink2).line_clamp(2).text_ellipsis().child(blurb))
                     })
                     .child(facts(session, t, false)),
             )
@@ -1229,7 +1265,7 @@ impl Home {
             .gap_x(px(18.))
             .gap_y(px(4.))
             .font_family(MONO_FONT)
-            .text_size(px(12.))
+            .text_size(px(text::CAPTION))
             .text_color(t.ink3)
             .child(format!("{} prompts", session.user_turns))
             .child(format!("{} replies", session.assistant_turns))
@@ -1248,14 +1284,11 @@ impl Home {
         }
 
         let mut card = div()
+            .flex_1()
+            .min_w(px(0.))
             .flex()
             .flex_col()
             .gap(px(18.))
-            .px(px(30.))
-            .py(px(26.))
-            .rounded(px(14.))
-            .bg(t.raise)
-            .shadow(t.card_shadow.clone())
             .child(
                 div()
                     .flex()
@@ -1272,7 +1305,7 @@ impl Home {
             )
             .child(
                 div()
-                    .text_size(px(21.))
+                    .text_size(px(text::HEADLINE))
                     .line_height(px(27.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title_text(
@@ -1286,7 +1319,7 @@ impl Home {
             Some(summary) => {
                 card = card.child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(px(text::LEAD))
                         .line_height(px(24.))
                         .text_color(t.ink2)
                         .child(summary.summary.clone()),
@@ -1315,7 +1348,7 @@ impl Home {
                         div()
                             .flex()
                             .gap(px(40.))
-                            .child(section("Left open", &summary.open_ends, Marker::Dash, t))
+                            .child(section("Open ends", &summary.open_ends, Marker::Dash, t))
                             .child(section("Friction", &summary.friction, Marker::Dash, t)),
                     );
                 }
@@ -1327,10 +1360,10 @@ impl Home {
                         .flex_col()
                         .gap(px(3.))
                         .font_family(MONO_FONT)
-                        .text_size(px(12.))
+                        .text_size(px(text::CAPTION))
                         .text_color(t.ink2);
                     for file in &summary.files[..shown] {
-                        files = files.child(div().truncate().child(file.clone()));
+                        files = files.child(div().one_line().child(file.clone()));
                     }
                     if summary.files.len() > shown {
                         files = files.child(
@@ -1360,10 +1393,10 @@ impl Home {
                         .child(label("You asked", t))
                         .child(
                             div()
-                                .text_size(px(15.))
+                                .text_size(px(text::LEAD))
                                 .line_height(px(23.))
                                 .text_color(t.ink2)
-                                .line_clamp(6)
+                                .line_clamp(6).text_ellipsis()
                                 .child(if session.first_prompt.is_empty() {
                                     "No typed prompt was recorded for this session.".to_string()
                                 } else {
@@ -1391,6 +1424,7 @@ impl Home {
             .child(
                 div()
                     .id("copy-resume")
+                    .reachable(t)
                     .h(px(36.))
                     .px(px(16.))
                     .flex()
@@ -1398,10 +1432,11 @@ impl Home {
                     .rounded(px(8.))
                     .bg(t.accent)
                     .text_color(t.on_accent)
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.9))
+                    .active(|style| style.opacity(0.75))
                     .on_click(cx.listener(|this, _, _, cx| this.copy_resume(cx)))
                     .child(if copied {
                         "Copied to clipboard".to_string()
@@ -1416,6 +1451,7 @@ impl Home {
             .child(
                 div()
                     .id("read-transcript")
+                    .reachable(t)
                     .h(px(36.))
                     .px(px(16.))
                     .flex()
@@ -1423,16 +1459,18 @@ impl Home {
                     .rounded(px(8.))
                     .border_1()
                     .border_color(t.line)
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .hover(|style| style.bg(t.fill))
+                    .active(|style| style.opacity(0.75))
                     .on_click(cx.listener(|this, _, _, cx| this.open_transcript(cx)))
                     .child("Read transcript"),
             )
             .child(
                 div()
                     .id("write-summary")
+                    .reachable(t)
                     .h(px(36.))
                     .px(px(16.))
                     .flex()
@@ -1440,18 +1478,23 @@ impl Home {
                     .rounded(px(8.))
                     .border_1()
                     .border_color(t.line)
-                    .text_color(if busy { t.ink3 } else { t.ink })
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .hover(|style| style.bg(t.fill))
-                    .on_click(cx.listener(|this, _, _, cx| this.summarize_selected(cx)))
+                    // While a summary is being written the button is plainly
+                    // not available: dimmed, and it does nothing.
+                    .when(busy, |el| el.text_color(t.ink3).opacity(0.6))
+                    .when(!busy, |el| {
+                        el.cursor_pointer()
+                            .hover(|style| style.bg(t.fill))
+                            .active(|style| style.opacity(0.75))
+                            .on_click(cx.listener(|this, _, _, cx| this.summarize_selected(cx)))
+                    })
                     .child(summary_action),
             );
         if session.summary_stale && !busy {
             actions = actions.child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child("The session has moved on since this was written."),
             );
@@ -1462,36 +1505,71 @@ impl Home {
             .child(
                 div()
                     .font_family(MONO_FONT)
-                    .text_size(px(12.))
+                    .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
-                    .truncate()
-                    .child(session.cwd.clone()),
+                    .id("card-folder")
+                    .tooltip(ui::tip(session.cwd.clone()))
+                    .one_line()
+                    .child(ui::middle(&session.cwd, 96)),
             )
             .child(actions);
         if let Some(error) = self.failed.get(&key) {
             card = card.child(
                 div()
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .text_color(t.ink2)
                     .child(format!("The summary could not be written: {error}")),
             );
         }
-        div().py(px(8.)).child(card)
+        // The same gutter the rows around it have, with the time in it, so
+        // the title keeps its place as the selection moves.
+        div().py(px(8.)).child(
+            div()
+                .flex()
+                .gap(px(20.))
+                .pl(px(20.))
+                .pr(px(30.))
+                .py(px(26.))
+                .rounded(px(14.))
+                .bg(t.raise)
+                .shadow(t.card_shadow.clone())
+                .child(
+                    div()
+                        .w(px(44.))
+                        .flex_shrink_0()
+                        .pt(px(1.))
+                        .font_family(MONO_FONT)
+                        .text_size(px(text::CAPTION))
+                        .text_color(t.ink3)
+                        .child(clock(session.updated_ms)),
+                )
+                .child(card),
+        )
     }
 }
 
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::for_appearance(window.appearance());
+        ui::settle(
+            &[&self.sidebar_scroll, &self.activity_scroll, &self.first_run_scroll],
+            &self.measured,
+            window,
+            cx,
+        );
         if self.first_run {
             return Self::commands(div(), cx)
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::on_key))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
+                )
                 .size_full()
                 .bg(t.bg)
                 .text_color(t.ink)
                 .font_family(UI_FONT)
-                .text_size(px(14.))
+                .text_size(px(text::BODY))
                 .line_height(px(20.))
                 .child(self.first_run_view(&t, cx));
         }
@@ -1519,6 +1597,7 @@ impl Render for Home {
                 .children(filtered.is_some().then(|| {
                     div()
                         .id("search-everywhere")
+                    .reachable(&t)
                         .h(px(34.))
                         .px(px(14.))
                         .flex()
@@ -1526,7 +1605,7 @@ impl Render for Home {
                         .rounded(px(8.))
                         .border_1()
                         .border_color(t.line)
-                        .text_size(px(13.))
+                        .text_size(px(text::SMALL))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(t.ink)
                         .cursor_pointer()
@@ -1547,12 +1626,16 @@ impl Render for Home {
         Self::commands(div(), cx)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
+            )
             .size_full()
             .flex()
             .bg(t.bg)
             .text_color(t.ink)
             .font_family(UI_FONT)
-            .text_size(px(14.))
+            .text_size(px(text::BODY))
             .line_height(px(20.))
             .child(self.sidebar(&t, cx))
             .child(
@@ -1579,7 +1662,7 @@ pub(crate) fn label(text: impl Into<SharedString>, t: &Theme) -> Div {
     let text: SharedString = text.into();
     div()
         .pb(px(6.))
-        .text_size(px(11.))
+        .text_size(px(text::CAPTION))
         .font_weight(FontWeight::MEDIUM)
         .text_color(t.ink3)
         .child(SharedString::from(text.to_uppercase()))
@@ -1649,7 +1732,7 @@ pub(crate) fn outcome_mark(summary: &Summary, with_open_ends: bool, t: &Theme) -
         .items_center()
         .gap(px(7.))
         .font_family(UI_FONT)
-        .text_size(px(13.))
+        .text_size(px(text::SMALL))
         .text_color(t.ink2)
         .child(svg().path(icon).size(px(11.)).flex_shrink_0().text_color(t.ink))
         .child(words)
@@ -1657,15 +1740,19 @@ pub(crate) fn outcome_mark(summary: &Summary, with_open_ends: bool, t: &Theme) -
 
 pub(crate) fn nav_row(t: &Theme, active: bool) -> Div {
     let fill = t.fill;
-    div()
+    ui::tab_stop(div(), t)
         .flex()
         .items_center()
         .gap(px(10.))
         .h(px(32.))
         .px(px(10.))
         .rounded(px(7.))
-        .text_size(px(13.))
+        .text_size(px(text::SMALL))
         .text_color(if active { t.ink } else { t.ink2 })
+        // The fill alone is too faint a mark, so the current row also
+        // carries a bar of the accent colour and heavier text.
+        .border_l_2()
+        .border_color(if active { t.accent } else { t.accent.opacity(0.) })
         .when(active, |el| el.bg(fill).font_weight(FontWeight::MEDIUM))
         .cursor_pointer()
         .hover(move |style| style.bg(fill))
@@ -1675,7 +1762,7 @@ fn count_badge(count: usize, t: &Theme) -> Div {
     div()
         .flex_shrink_0()
         .font_family(MONO_FONT)
-        .text_size(px(11.))
+        .text_size(px(text::CAPTION))
         .text_color(t.ink3)
         .child(count.to_string())
 }
@@ -1705,9 +1792,10 @@ pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
         .items_center()
         .gap(px(10.))
         .font_family(MONO_FONT)
-        .text_size(px(12.))
+        .text_size(px(text::CAPTION))
         .text_color(t.ink3)
-        .child(logo(session.origin, t, 14.));
+        .child(logo(session.origin, t, 14.))
+        .child(session.origin.name());
     if !session.project().is_empty() {
         row = row.child(session.project().to_string());
     }
@@ -1717,7 +1805,7 @@ pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
         .as_deref()
         .filter(|b| !b.is_empty() && *b != "HEAD")
     {
-        row = row.child(div().min_w(px(0.)).truncate().child(branch.to_string()));
+        row = row.child(div().min_w(px(0.)).one_line().child(branch.to_string()));
     }
     if with_time {
         row = row.child(format!(
@@ -1745,8 +1833,8 @@ fn title_text(title: &str, matches: &[u32], t: &Theme) -> StyledText {
         }
     }
     let style = HighlightStyle {
-        color: Some(t.accent),
         font_weight: Some(FontWeight::BOLD),
+        background_color: Some(t.accent.opacity(0.18)),
         ..Default::default()
     };
     StyledText::new(SharedString::from(title.to_string()))

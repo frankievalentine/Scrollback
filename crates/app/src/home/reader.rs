@@ -5,7 +5,8 @@
 
 use super::{facts, outcome_mark, Home};
 use crate::markdown;
-use crate::theme::{Theme, MONO_FONT};
+use crate::theme::{text, Theme, MONO_FONT};
+use crate::ui::{OneLine, Reachable};
 use gpui::{
     div, list, prelude::*, px, AnyElement, Context, Div, FontWeight, ListAlignment, ListOffset,
     ListState, Window,
@@ -392,12 +393,13 @@ impl Home {
                         .child(
                             div()
                                 .id("back")
+                    .reachable(t)
                                 .h(px(34.))
                                 .px(px(12.))
                                 .flex()
                                 .items_center()
                                 .rounded(px(8.))
-                                .text_size(px(13.))
+                                .text_size(px(text::SMALL))
                                 .text_color(t.ink2)
                                 .cursor_pointer()
                                 .hover(move |style| style.bg(fill))
@@ -407,7 +409,7 @@ impl Home {
                         .child(
                             div()
                                 .font_family(MONO_FONT)
-                                .text_size(px(11.))
+                                .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
                                 .child(keys),
                         ),
@@ -460,7 +462,7 @@ impl Home {
                 )
                 .child(
                     div()
-                        .text_size(px(21.))
+                        .text_size(px(text::HEADLINE))
                         .line_height(px(27.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(session.display_title().to_string()),
@@ -468,7 +470,7 @@ impl Home {
             if let Some(summary) = &session.summary {
                 head = head.child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(px(text::LEAD))
                         .line_height(px(24.))
                         .text_color(t.ink2)
                         .child(summary.summary.clone()),
@@ -477,7 +479,7 @@ impl Home {
             if !reading.steps.is_empty() {
                 head = head.child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(text::SMALL))
                         .text_color(t.ink3)
                         .child("Grouped by the steps in the summary. Click a step to read the turns behind it."),
                 );
@@ -508,6 +510,7 @@ impl Home {
             return centered(
                 div()
                     .id(("step", i))
+                    .reachable(&t)
                     .flex()
                     .gap(px(14.))
                     .px(px(20.))
@@ -524,9 +527,9 @@ impl Home {
                             .flex_shrink_0()
                             .pt(px(2.))
                             .font_family(MONO_FONT)
-                            .text_size(px(12.))
+                            .text_size(px(text::CAPTION))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(if open { t.accent } else { t.ink3 })
+                            .text_color(if open { t.ink } else { t.ink3 })
                             .child(format!(
                                 "{} {}",
                                 if open { "▾" } else { "▸" },
@@ -542,7 +545,7 @@ impl Home {
                             .gap(px(3.))
                             .child(
                                 div()
-                                    .text_size(px(15.))
+                                    .text_size(px(text::LEAD))
                                     .line_height(px(22.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(step.title.clone()),
@@ -550,7 +553,7 @@ impl Home {
                             .child(
                                 div()
                                     .font_family(MONO_FONT)
-                                    .text_size(px(12.))
+                                    .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(about),
                             ),
@@ -588,7 +591,7 @@ impl Home {
             }
             Block::Note(note) => turn(
                 "",
-                div().text_size(px(13.)).text_color(t.ink3).child(note.clone()),
+                div().text_size(px(text::SMALL)).text_color(t.ink3).child(note.clone()),
                 &t,
             )
             .into_any_element(),
@@ -598,6 +601,7 @@ impl Home {
                 let mut column = div().flex().flex_col().items_start().gap(px(8.)).child(
                     div()
                         .id(("tools", ix))
+                    .reachable(&t)
                         .h(px(28.))
                         .px(px(10.))
                         .flex()
@@ -607,7 +611,7 @@ impl Home {
                         .border_1()
                         .border_color(t.line)
                         .font_family(MONO_FONT)
-                        .text_size(px(12.))
+                        .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
                         .cursor_pointer()
                         .hover(move |style| style.bg(fill))
@@ -627,19 +631,19 @@ impl Home {
                         .border_1()
                         .border_color(t.line)
                         .font_family(MONO_FONT)
-                        .text_size(px(12.))
+                        .text_size(px(text::CAPTION))
                         .line_height(px(18.));
                     for (name, target) in calls {
                         details = details.child(
                             div()
                                 .flex()
                                 .gap(px(12.))
-                                .child(div().w(px(120.)).flex_shrink_0().truncate().child(name.clone()))
+                                .child(div().w(px(120.)).flex_shrink_0().one_line().child(name.clone()))
                                 .child(
                                     div()
                                         .flex_1()
                                         .min_w(px(0.))
-                                        .truncate()
+                                        .one_line()
                                         .text_color(t.ink3)
                                         .child(target.clone().unwrap_or_default()),
                                 ),
@@ -686,7 +690,7 @@ fn turn(role: &'static str, content: impl IntoElement, t: &Theme) -> Div {
                 .flex_shrink_0()
                 .pt(px(2.))
                 .font_family(MONO_FONT)
-                .text_size(px(11.))
+                .text_size(px(text::CAPTION))
                 .text_color(t.ink3)
                 .child(role),
         )
@@ -694,7 +698,7 @@ fn turn(role: &'static str, content: impl IntoElement, t: &Theme) -> Div {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(14.))
+                .text_size(px(text::BODY))
                 .line_height(px(22.))
                 .child(content),
         )

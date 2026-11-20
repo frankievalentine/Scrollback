@@ -3,7 +3,8 @@
 //! session window follows without being told directly.
 
 use crate::home::{label, logo, nav_row};
-use crate::theme::{self, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, self, Theme, MONO_FONT, UI_FONT};
+use crate::ui::{self, OneLine, Reachable};
 use gpui::{
     div, point, prelude::*, px, size, svg, App, Bounds, Context, Div, FocusHandle, FontWeight,
     Global, PathPromptOptions, SharedString, Stateful, TitlebarOptions, Window, WindowBounds,
@@ -103,6 +104,8 @@ pub fn open(cx: &mut App, tab: Tab) {
 pub struct SettingsView {
     tab: Tab,
     config: Config,
+    scroll: gpui::ScrollHandle,
+    measured: ui::Measured,
     focus: FocusHandle,
 }
 
@@ -118,6 +121,8 @@ impl SettingsView {
         SettingsView {
             tab,
             config: cx.global::<Settings>().0.clone(),
+            scroll: gpui::ScrollHandle::new(),
+            measured: Default::default(),
             focus: cx.focus_handle(),
         }
     }
@@ -278,13 +283,15 @@ impl SettingsView {
                             .child(div().child(shared))
                             .child(
                                 div()
-                                    .truncate()
+                                    .id(("folder", harness as usize))
+                                    .tooltip(ui::tip(folder.display().to_string()))
+                                    .one_line()
                                     .font_family(MONO_FONT)
-                                    .text_size(px(12.))
+                                    .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(format!(
                                         "{}{}",
-                                        shown(&folder),
+                                        ui::middle(&shown(&folder), 46),
                                         if found { "" } else { "  (not found)" }
                                     )),
                             ),
@@ -350,7 +357,7 @@ impl SettingsView {
                     .child(
                         div()
                             .font_family(MONO_FONT)
-                            .text_size(px(12.))
+                            .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(tool),
                     ),
@@ -360,7 +367,7 @@ impl SettingsView {
                     .pt(px(18.))
                     .border_t_1()
                     .border_color(t.line)
-                    .text_size(px(13.))
+                    .text_size(px(text::SMALL))
                     .line_height(px(20.))
                     .text_color(t.ink2)
                     .child(
@@ -387,14 +394,14 @@ impl SettingsView {
                             .flex_col()
                             .child(
                                 div()
-                                    .text_size(px(20.))
+                                    .text_size(px(text::HEADLINE))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("scrollback"),
                             )
                             .child(
                                 div()
                                     .font_family(MONO_FONT)
-                                    .text_size(px(12.))
+                                    .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(format!("version {}", env!("CARGO_PKG_VERSION"))),
                             ),
@@ -421,13 +428,13 @@ impl SettingsView {
                     .child(
                         div()
                             .font_family(MONO_FONT)
-                            .text_size(px(12.))
+                            .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(index.display().to_string()),
                     )
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(text::SMALL))
                             .text_color(t.ink2)
                             .child("scrollback reads session files where they are and never writes to them."),
                     ),
@@ -438,6 +445,7 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::for_appearance(window.appearance());
+        ui::settle(&[&self.scroll], &self.measured, window, cx);
         let mut tabs = div()
             .w(px(168.))
             .flex_shrink_0()
@@ -469,32 +477,40 @@ impl Render for SettingsView {
         };
         div()
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event, window, cx| {
+                ui::control_key(event, &this.focus, window, cx);
+            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
+            )
             .size_full()
             .flex()
             .bg(t.bg)
             .text_color(t.ink)
             .font_family(UI_FONT)
-            .text_size(px(14.))
+            .text_size(px(text::BODY))
             .line_height(px(20.))
             .child(tabs)
             .child(
+                div().relative().flex_1().min_w(px(0.)).h_full().child(
                 div()
                     .id("settings-page")
-                    .flex_1()
-                    .min_w(px(0.))
-                    .h_full()
+                    .size_full()
                     .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .pt(px(52.))
                     .px(px(32.))
                     .pb(px(32.))
                     .child(
                         div()
                             .pb(px(22.))
-                            .text_size(px(18.))
+                            .text_size(px(text::TITLE))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(self.tab.name()),
                     )
-                    .child(content),
+                    .child(content))
+                    .children(ui::scrollbar(&self.scroll, &t)),
             )
     }
 }
@@ -519,7 +535,7 @@ fn row(name: &'static str, about: &'static str, control: impl IntoElement, t: &T
                 .child(div().font_weight(FontWeight::MEDIUM).child(name))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(text::SMALL))
                         .line_height(px(19.))
                         .text_color(t.ink3)
                         .child(about),
@@ -532,6 +548,7 @@ fn row(name: &'static str, about: &'static str, control: impl IntoElement, t: &T
 fn switch(id: impl Into<gpui::ElementId>, on: bool, t: &Theme) -> Stateful<Div> {
     div()
         .id(id)
+        .reachable(t)
         .w(px(38.))
         .h(px(22.))
         .flex_shrink_0()
@@ -539,14 +556,21 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool, t: &Theme) -> Stateful<Div> 
         .flex()
         .when(on, |el| el.justify_end())
         .rounded_full()
-        .bg(if on { t.accent } else { t.line })
+        .bg(if on { t.accent } else { t.control_off })
         .cursor_pointer()
         .child(div().size(px(18.)).rounded_full().bg(if on { t.on_accent } else { t.raise }))
 }
 
 /// The track a set of mutually exclusive choices sits on.
 fn segmented(t: &Theme) -> Div {
-    div().flex().gap(px(2.)).p(px(3.)).rounded(px(9.)).bg(t.fill)
+    div()
+        .flex()
+        .gap(px(2.))
+        .p(px(3.))
+        .rounded(px(9.))
+        .bg(t.fill)
+        .border_1()
+        .border_color(t.line)
 }
 
 fn segment(
@@ -558,12 +582,13 @@ fn segment(
     let picked = t.segment;
     div()
         .id(id)
+        .reachable(t)
         .h(px(28.))
         .px(px(12.))
         .flex()
         .items_center()
-        .rounded(px(7.))
-        .text_size(px(13.))
+        .rounded(px(6.))
+        .text_size(px(text::SMALL))
         .text_color(if chosen { t.ink } else { t.ink2 })
         .cursor_pointer()
         .when(chosen, |el| el.bg(picked).font_weight(FontWeight::MEDIUM))
@@ -574,6 +599,7 @@ fn button(id: impl Into<gpui::ElementId>, name: &'static str, t: &Theme) -> Stat
     let fill = t.fill;
     div()
         .id(id)
+        .reachable(t)
         .h(px(30.))
         .px(px(12.))
         .flex()
@@ -581,9 +607,10 @@ fn button(id: impl Into<gpui::ElementId>, name: &'static str, t: &Theme) -> Stat
         .rounded(px(7.))
         .border_1()
         .border_color(t.line)
-        .text_size(px(13.))
+        .text_size(px(text::SMALL))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .hover(move |style| style.bg(fill))
+        .active(|style| style.opacity(0.75))
         .child(name)
 }
