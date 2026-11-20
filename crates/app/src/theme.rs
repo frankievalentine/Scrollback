@@ -128,10 +128,14 @@ impl Theme {
             ink3: rgb(0x5C5F66).into(),
             accent: rgb(0x3B5BDB).into(),
             on_accent: rgb(0xFFFFFF).into(),
+            // A hairline edge and a soft, short lift: enough to set the
+            // selected card apart on a light page without a heavy cast.
+            // A hairline edge and a soft lift, kept short so the page under
+            // a raised card does not go grey.
             card_shadow: vec![
-                shadow(0x17181A0F, 0., 0., 1.),
-                shadow(0x17181A1F, 10., 18., -10.),
-                shadow(0x17181A38, 32., 56., -28.),
+                shadow(0x17181A10, 0., 0., 1.),
+                shadow(0x17181A12, 2., 6., -1.),
+                shadow(0x17181A22, 16., 32., -14.),
             ],
         }
     }
