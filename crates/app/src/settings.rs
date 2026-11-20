@@ -160,6 +160,7 @@ impl SettingsView {
         let auto = self.config.auto_summarize;
         let in_menu_bar = self.config.menu_bar_icon;
         let quiet = self.config.quiet_minutes;
+        let live = self.config.live_summaries;
         let mut wait = segmented(t);
         for minutes in QUIET_MINUTES {
             let name = match minutes {
@@ -195,8 +196,17 @@ impl SettingsView {
             ))
             .child(row(
                 "Summarise after",
-                "How long a session must be idle first, so one still in use is left alone.",
+                "How long a session must be idle to count as finished.",
                 wait,
+                t,
+            ))
+            .child(row(
+                "Summarise sessions in use",
+                "Also summarise a session a couple of minutes in, and again every ten \
+                 minutes it moves on, so it is in the menu bar list while you work. Uses \
+                 more requests.",
+                switch("live", live, t)
+                    .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.live_summaries = !live))),
                 t,
             ))
             .child(row("Appearance", "Light, dark, or whatever the Mac is set to.", look, t))

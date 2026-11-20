@@ -51,8 +51,9 @@ pub fn start(cx: &mut App) {
     .detach();
 }
 
-/// Refresh the index and summarise a couple of sessions that have gone
-/// quiet. Returns the sessions that failed, with why.
+/// Refresh the index and summarise a couple of sessions that are due one:
+/// those gone quiet, and those in use that have moved on. Returns the
+/// sessions that failed, with why.
 fn pass(config: &scrollback_core::Config, skip: &HashSet<String>) -> Vec<(String, String)> {
     if std::env::var_os("SCROLLBACK_NO_CLAUDE").is_some() || summarize::claude_binary().is_none() {
         return Vec::new();
@@ -65,10 +66,8 @@ fn pass(config: &scrollback_core::Config, skip: &HashSet<String>) -> Vec<(String
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64);
-    let quiet_ms = i64::from(config.quiet_minutes.max(1)) * 60 * 1000;
     let due = sessions.iter().filter(|s| {
-        (s.summary.is_none() || s.summary_stale)
-            && now_ms - s.updated_ms >= quiet_ms
+        summarize::due(s, config, now_ms)
             && !skip.contains(&s.key())
             && !config.hidden_sources.iter().any(|slug| slug == s.origin.slug())
     });

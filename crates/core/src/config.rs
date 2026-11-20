@@ -21,10 +21,15 @@ pub struct Config {
     /// has, nothing is summarised unasked.
     #[serde(default)]
     pub onboarded: bool,
-    /// Minutes a session must be quiet before it is summarised unasked, so
-    /// one still in use is not summarised mid-thought.
+    /// Minutes a session must be quiet before it counts as finished and its
+    /// summary is written unasked.
     #[serde(default = "ten")]
     pub quiet_minutes: u32,
+    /// Also summarise a session while it is still in use, and bring that
+    /// summary up to date every so often, so the session can be found by
+    /// what it is about before it ends.
+    #[serde(default = "yes")]
+    pub live_summaries: bool,
     /// Which model writes summaries; one of `SUMMARY_MODELS`.
     #[serde(default = "haiku")]
     pub summary_model: String,
@@ -66,6 +71,7 @@ impl Default for Config {
             auto_summarize: true,
             onboarded: false,
             quiet_minutes: ten(),
+            live_summaries: true,
             summary_model: haiku(),
             theme: system(),
             hidden_sources: Vec::new(),

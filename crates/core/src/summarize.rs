@@ -5,6 +5,7 @@
 //! What is sent: the user's prompts, the agent's replies, and the names and
 //! targets of tool calls. Tool output and file contents are not sent.
 
+use crate::config::Config;
 use crate::model::{Session, Summary};
 use crate::transcript;
 use anyhow::{anyhow, bail, Context, Result};
@@ -17,6 +18,39 @@ use std::time::{Duration, Instant};
 
 /// Characters of condensed transcript sent per session (roughly 7k tokens).
 pub const BUDGET: usize = 28_000;
+
+/// How much further a session in use must have moved on before its summary
+/// is written again.
+pub const LIVE_EVERY_MS: i64 = 10 * 60 * 1000;
+/// How long a session must have been going before its first summary, so
+/// there is something to summarise.
+pub const LIVE_AFTER_MS: i64 = 2 * 60 * 1000;
+
+/// Whether a session should have a summary written for it now, unasked.
+///
+/// A session that has gone quiet gets one as soon as it lacks a current
+/// summary. A session still in use gets one once it has been going for a
+/// couple of minutes, and again each time it has moved on by ten minutes,
+/// when `live_summaries` is on.
+pub fn due(session: &Session, config: &Config, now_ms: i64) -> bool {
+    if session.summary.is_some() && !session.summary_stale {
+        return false;
+    }
+    let quiet_ms = i64::from(config.quiet_minutes.max(1)) * 60 * 1000;
+    if now_ms - session.updated_ms >= quiet_ms {
+        return true;
+    }
+    if !config.live_summaries {
+        return false;
+    }
+    match (&session.summary, session.summary_for_ms) {
+        (Some(_), Some(covered_ms)) => session.updated_ms - covered_ms >= LIVE_EVERY_MS,
+        (Some(_), None) => true,
+        (None, _) => {
+            session.assistant_turns > 0 && session.updated_ms - session.started_ms >= LIVE_AFTER_MS
+        }
+    }
+}
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -346,6 +380,69 @@ fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Va
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Harness, Outcome};
+
+    const MINUTE: i64 = 60 * 1000;
+    const NOW: i64 = 1_000 * MINUTE;
+
+    /// A session started `age` minutes ago and last written to `idle`
+    /// minutes ago, with a summary covering it up to `covered` minutes ago.
+    fn session(age: i64, idle: i64, covered: Option<i64>) -> Session {
+        let mut session = Session::new(Harness::ClaudeCode, "a", "a.jsonl");
+        session.started_ms = NOW - age * MINUTE;
+        session.updated_ms = NOW - idle * MINUTE;
+        session.assistant_turns = 3;
+        if let Some(covered) = covered {
+            session.summary = Some(Summary {
+                title: String::new(),
+                summary: String::new(),
+                asked: String::new(),
+                happened: Vec::new(),
+                open_ends: Vec::new(),
+                friction: Vec::new(),
+                outcome: Outcome::Done,
+                files: Vec::new(),
+                step_starts: Vec::new(),
+                blocks_seen: 0,
+            });
+            session.summary_for_ms = Some(NOW - covered * MINUTE);
+            session.summary_stale = covered > idle;
+        }
+        session
+    }
+
+    #[test]
+    fn a_quiet_session_is_due_until_its_summary_is_current() {
+        let config = Config::default();
+        assert!(due(&session(60, 30, None), &config, NOW));
+        assert!(due(&session(60, 30, Some(45)), &config, NOW));
+        assert!(!due(&session(60, 30, Some(30)), &config, NOW));
+    }
+
+    #[test]
+    fn a_session_in_use_is_due_once_it_has_got_going() {
+        let config = Config::default();
+        assert!(!due(&session(1, 0, None), &config, NOW));
+        assert!(due(&session(5, 0, None), &config, NOW));
+        let mut unanswered = session(5, 0, None);
+        unanswered.assistant_turns = 0;
+        assert!(!due(&unanswered, &config, NOW));
+    }
+
+    #[test]
+    fn a_session_in_use_is_summarised_again_every_ten_minutes_of_progress() {
+        let config = Config::default();
+        assert!(!due(&session(60, 0, Some(4)), &config, NOW));
+        assert!(due(&session(60, 0, Some(12)), &config, NOW));
+    }
+
+    #[test]
+    fn sessions_in_use_are_left_alone_when_live_summaries_are_off() {
+        let config = Config { live_summaries: false, ..Config::default() };
+        assert!(!due(&session(60, 0, None), &config, NOW));
+        assert!(!due(&session(60, 0, Some(30)), &config, NOW));
+        assert!(due(&session(60, 30, None), &config, NOW));
+    }
 
     #[test]
     fn block_numbers_become_indexes() {

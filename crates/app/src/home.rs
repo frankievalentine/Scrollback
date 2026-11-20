@@ -467,9 +467,9 @@ impl Home {
     /// is left exactly as it is; otherwise the selection and scroll position
     /// are carried over.
     fn apply_sessions(&mut self, sessions: Vec<Session>, status: SharedString, cx: &mut Context<Self>) {
-        let fingerprint = |list: &[Session]| -> Vec<(String, i64, bool)> {
+        let fingerprint = |list: &[Session]| -> Vec<(String, i64, bool, Option<i64>)> {
             list.iter()
-                .map(|s| (s.key(), s.updated_ms, s.summary.is_some()))
+                .map(|s| (s.key(), s.updated_ms, s.summary.is_some(), s.summary_for_ms))
                 .collect()
         };
         self.status = status;
@@ -517,9 +517,10 @@ impl Home {
         cx.notify();
     }
 
-    /// Start summaries for sessions that have gone quiet and lack a current
-    /// one, newest first, a couple at a time. Does nothing when the setting
-    /// is off or the plan limit was reported recently.
+    /// Start summaries for sessions that are due one, newest first, a couple
+    /// at a time: those gone quiet, and those in use that have moved on.
+    /// Does nothing when the setting is off or the plan limit was reported
+    /// recently.
     fn pump_summaries(&mut self, cx: &mut Context<Self>) {
         if self.first_run || !self.claude_found || !self.config.auto_summarize {
             return;
@@ -531,12 +532,9 @@ impl Home {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        // Long enough quiet that a session in use is not summarised mid-thought.
-        let quiet_ms = i64::from(self.config.quiet_minutes.max(1)) * 60 * 1000;
         while self.busy.len() < SUMMARIES_AT_ONCE {
             let next = self.sessions.iter().position(|s| {
-                (s.summary.is_none() || s.summary_stale)
-                    && now_ms - s.updated_ms >= quiet_ms
+                summarize::due(s, &self.config, now_ms)
                     && !self.busy.contains(&s.key())
                     && !self.failed.contains_key(&s.key())
             });
@@ -1042,6 +1040,8 @@ impl Home {
         if !self.busy.insert(key.clone()) {
             return;
         }
+        // What the summary will cover; the session may move on meanwhile.
+        let covered_ms = session.updated_ms;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -1051,21 +1051,29 @@ impl Home {
                 anyhow::Ok(written.summary)
             });
             let result = work.await;
-            this.update(cx, |this, cx| this.summary_arrived(key, result, cx))
+            this.update(cx, |this, cx| this.summary_arrived(key, covered_ms, result, cx))
                 .ok();
         })
         .detach();
     }
 
-    fn summary_arrived(&mut self, key: String, result: anyhow::Result<Summary>, cx: &mut Context<Self>) {
+    fn summary_arrived(
+        &mut self,
+        key: String,
+        covered_ms: i64,
+        result: anyhow::Result<Summary>,
+        cx: &mut Context<Self>,
+    ) {
         self.busy.remove(&key);
         let index = self.sessions.iter().position(|s| s.key() == key);
         match result {
             Ok(summary) => {
                 eprintln!("summary written for {key}: {}", summary.title);
                 if let Some(index) = index {
-                    self.sessions[index].summary = Some(summary);
-                    self.sessions[index].summary_stale = false;
+                    let session = &mut self.sessions[index];
+                    session.summary = Some(summary);
+                    session.summary_for_ms = Some(covered_ms);
+                    session.summary_stale = covered_ms < session.updated_ms;
                 }
             }
             Err(err) => {
@@ -1484,12 +1492,12 @@ impl Home {
                     })
                     .child(summary_action),
             );
-        if session.summary_stale && !busy {
+        if let Some(covers) = covers(session).filter(|_| !busy) {
             actions = actions.child(
                 div()
                     .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
-                    .child("The session has moved on since this was written."),
+                    .child(covers),
             );
         }
 
@@ -1842,6 +1850,21 @@ pub(crate) fn clock(ms: i64) -> String {
     local(ms)
         .map(|t| t.format("%H:%M").to_string())
         .unwrap_or_default()
+}
+
+/// How far a summary reaches, when the session has gone on past it: up to
+/// what time today, or just that it is behind.
+pub(crate) fn covers(session: &Session) -> Option<String> {
+    if !session.summary_stale {
+        return None;
+    }
+    let today = session
+        .summary_for_ms
+        .filter(|&covered_ms| day_label(covered_ms) == "Today");
+    Some(match today {
+        Some(covered_ms) => format!("Covers the session up to {}.", clock(covered_ms)),
+        None => "The session has moved on since this was written.".to_string(),
+    })
 }
 
 pub(crate) fn day_label(ms: i64) -> String {

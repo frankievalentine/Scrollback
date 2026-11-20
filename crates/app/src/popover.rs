@@ -1,10 +1,10 @@
 //! The popover under the menu bar icon: quick access to the most recent
 //! sessions that already have a summary. It opens at once from the saved
 //! index and never waits on a summary being written; a session shows up here
-//! once it has one. Type to search, arrow through the list, copy a resume
+//! once it has one, which for a session in use is a couple of minutes in. Type to search, arrow through the list, copy a resume
 //! command, or hand a session to the window.
 
-use crate::home::{self, clock, day_label, facts, label, outcome_mark, resume_command};
+use crate::home::{self, clock, covers, day_label, facts, label, outcome_mark, resume_command};
 use crate::open_main;
 use crate::theme::{text, Theme, MONO_FONT, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
@@ -211,7 +211,7 @@ impl Popover {
                 new.key() == old.key()
                     && new.updated_ms == old.updated_ms
                     && new.summary.is_some() == old.summary.is_some()
-                    && new.summary_stale == old.summary_stale
+                    && new.summary_for_ms == old.summary_for_ms
             });
         if unchanged {
             return;
@@ -583,11 +583,11 @@ impl Popover {
                         .items_center()
                         .gap(px(12.))
                         .child(outcome_mark(summary, true, t))
-                        .children(session.summary_stale.then(|| {
+                        .children(covers(session).map(|covers| {
                             div()
                                 .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
-                                .child("Written before the session moved on.")
+                                .child(covers)
                         })),
                 );
             if !summary.open_ends.is_empty() {

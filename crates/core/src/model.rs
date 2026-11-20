@@ -215,6 +215,9 @@ pub struct Session {
     pub summary: Option<Summary>,
     /// True when the session has had activity since its summary was written.
     pub summary_stale: bool,
+    /// The session's last activity at the time its summary was written, so
+    /// the summary covers everything up to then.
+    pub summary_for_ms: Option<i64>,
 }
 
 impl Session {
@@ -242,6 +245,7 @@ impl Session {
             parent: None,
             summary: None,
             summary_stale: false,
+            summary_for_ms: None,
         }
     }
 

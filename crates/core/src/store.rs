@@ -226,6 +226,7 @@ impl Store {
                 parent: row.get(16)?,
                 active_ms: row.get(19)?,
                 summary_stale: summary.is_some() && summary_for_ms.unwrap_or(0) < updated_ms,
+                summary_for_ms: summary.as_ref().and(summary_for_ms),
                 summary,
             })
         })?;
