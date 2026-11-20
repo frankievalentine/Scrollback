@@ -43,32 +43,50 @@ scrolling through transcripts.
 
 ## Screenshots
 
-The first time it opens, Scrollback shows which tools it found sessions for and asks how summaries should be written:
+The sessions shown here are made up. Each picture follows your light or dark
+theme on GitHub.
+
+### First run
+
+Scrollback shows which tools it found sessions for, and asks whether
+summaries should be written automatically.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/intro-dark.png">
   <img src="docs/screenshots/intro-light.png" alt="The first-run screen, listing the sources found">
 </picture>
 
-The menu bar popover: recent summaries, and the week at a glance.
+### Menu bar
 
+A click on the menu bar icon opens recent summaries, or the week at a glance.
+
+<table>
+  <tr>
+    <th>Recent</th>
+    <th>Activity</th>
+  </tr>
+  <tr>
+    <td>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/popover-recent-dark.png">
-  <img src="docs/screenshots/popover-recent-light.png" alt="The menu bar popover's recent sessions" width="420">
+  <img src="docs/screenshots/popover-recent-light.png" alt="The menu bar popover's recent sessions">
 </picture>
+    </td>
+    <td>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/popover-activity-dark.png">
-  <img src="docs/screenshots/popover-activity-light.png" alt="The menu bar popover's week of activity" width="420">
+  <img src="docs/screenshots/popover-activity-light.png" alt="The menu bar popover's week of activity">
 </picture>
+    </td>
+  </tr>
+</table>
 
-With nothing found yet:
+### Before any sessions
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/empty-dark.png">
   <img src="docs/screenshots/empty-light.png" alt="The session window with no sessions yet">
 </picture>
-
-All of the sessions shown are made up.
 
 ## Sources
 
