@@ -809,7 +809,9 @@ impl Home {
         }
 
         div()
-            .w(px(216.))
+            // Wide enough for "Summarise automatically" and its "off" to sit
+            // on one line without cutting the name short.
+            .w(px(228.))
             .flex_shrink_0()
             .h_full()
             .flex()
@@ -855,26 +857,16 @@ impl Home {
                     .id("open-settings")
                     .on_click(cx.listener(|_, _, _, cx| settings::open(cx, Tab::General)))
                     .child(div().flex_1().child("Settings"))
-                    .child(
-                        div()
-                            .font_family(mono())
-                            .text_size(px(text::CAPTION))
-                            .text_color(t.ink3)
-                            .child(ui::shortcut(",")),
-                    ),
+                    // A comma's ink sits at the left of its cell, so the
+                    // shortcut is nudged right to end where the counts do.
+                    .child(trailing(ui::shortcut(","), t).mr(px(-2.))),
             )
             .child(
                 nav_row(t, false)
                     .id("auto-summarise")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_summarize(cx)))
                     .child(div().flex_1().child("Summarise automatically"))
-                    .child(
-                        div()
-                            .font_family(mono())
-                            .text_size(px(text::CAPTION))
-                            .text_color(t.ink3)
-                            .child(if self.config.auto_summarize { "on" } else { "off" }),
-                    ),
+                    .child(trailing(if self.config.auto_summarize { "on" } else { "off" }, t)),
             )
             .child(
                 div()
@@ -1805,12 +1797,21 @@ pub(crate) fn nav_row(t: &Theme, active: bool) -> Div {
 }
 
 fn count_badge(count: usize, t: &Theme) -> Div {
+    trailing(count.to_string(), t)
+}
+
+/// What sits at the right end of a sidebar row: a count, a shortcut, or a
+/// setting's state. Every row ends its text at the same edge, so these
+/// read as one column.
+fn trailing(text: impl Into<SharedString>, t: &Theme) -> Div {
     div()
         .flex_shrink_0()
+        .flex()
+        .justify_end()
         .font_family(mono())
         .text_size(px(text::CAPTION))
         .text_color(t.ink3)
-        .child(count.to_string())
+        .child(text.into())
 }
 
 pub(crate) fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
