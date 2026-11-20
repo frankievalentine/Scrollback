@@ -11,7 +11,7 @@
 use crate::model::{Harness, Session};
 use crate::sources::typed_prompt;
 use crate::transcript::Event;
-use crate::{home, parse_ts, squash};
+use crate::{parse_ts, squash};
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 fn user_dir() -> PathBuf {
-    home().join("Library/Application Support/Cursor/User")
+    super::location(Harness::Cursor)
 }
 
 pub fn db_path() -> PathBuf {

@@ -4,7 +4,7 @@
 
 use super::{facts, label, logo, Home};
 use crate::theme::{Theme, MONO_FONT};
-use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent, Window};
+use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent};
 use scrollback_core::{sources, Harness, Origin};
 
 const RECENT_SHOWN: usize = 4;
@@ -63,28 +63,18 @@ impl Home {
         // A first run forced for development is a rehearsal: it must not
         // overwrite the settings the real one saved.
         if std::env::var_os("SCROLLBACK_FIRST_RUN").is_none() {
-            if let Err(err) = self.config.save() {
-                eprintln!("could not save settings: {err:#}");
-            }
+            crate::settings::store(self.config.clone(), cx);
         }
         self.pump_summaries(cx);
         self.pump_digest(cx);
         cx.notify();
     }
 
-    pub(super) fn first_run_key(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let mods = event.keystroke.modifiers;
+    pub(super) fn first_run_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
             "enter" => self.finish_first_run(cx),
             "up" => self.choose_auto(true, cx),
             "down" => self.choose_auto(false, cx),
-            "q" if mods.platform => cx.quit(),
-            "w" if mods.platform => window.remove_window(),
             _ => {}
         }
     }

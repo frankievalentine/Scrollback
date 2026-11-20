@@ -12,7 +12,7 @@ pub mod summarize;
 pub mod transcript;
 
 pub use activity::Activity;
-pub use config::Config;
+pub use config::{Config, QUIET_MINUTES, SUMMARY_MODELS};
 pub use model::{Harness, Origin, Outcome, Session, Summary};
 pub use store::{Digest, MessageHit, Store};
 

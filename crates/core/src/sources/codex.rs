@@ -4,7 +4,7 @@
 
 use crate::model::{Harness, Origin, Session};
 use crate::sources::{typed_prompt, walk, working_folder};
-use crate::{home, parse_ts, squash};
+use crate::{parse_ts, squash};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub fn root() -> PathBuf {
-    home().join(".codex")
+    super::location(Harness::Codex)
 }
 
 pub fn files() -> Vec<PathBuf> {

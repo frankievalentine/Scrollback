@@ -1,13 +1,13 @@
+mod app_menu;
 mod home;
 mod markdown;
+mod settings;
 mod theme;
 
 use gpui::{
-    actions, point, prelude::*, px, size, App, Application, AssetSource, Bounds, KeyBinding, Menu,
-    MenuItem, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
+    point, prelude::*, px, size, App, Application, AssetSource, Bounds, SharedString,
+    TitlebarOptions, WindowBounds, WindowOptions,
 };
-
-actions!(scrollback, [Quit]);
 use home::Home;
 use std::borrow::Cow;
 
@@ -50,14 +50,8 @@ fn main() {
     let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
-        // The menu bar entry every Mac app is expected to have. Everything
-        // else is driven from the window itself.
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.set_menus(vec![Menu {
-            name: "scrollback".into(),
-            items: vec![MenuItem::action("Quit scrollback", Quit)],
-        }]);
+        settings::install(cx);
+        app_menu::install(cx);
 
         // Development aid: `SCROLLBACK_HEIGHT=1300` opens a taller window, to
         // see a whole view in one screenshot.
@@ -85,6 +79,36 @@ fn main() {
             },
         )
         .expect("opening the main window");
+
+        // Development aid: `SCROLLBACK_DEV_SETTINGS=sources` opens the settings
+        // window on that page at launch.
+        if let Ok(page) = std::env::var("SCROLLBACK_DEV_SETTINGS") {
+            let tab = match page.as_str() {
+                "sources" => settings::Tab::Sources,
+                "summaries" => settings::Tab::Summaries,
+                "about" => settings::Tab::About,
+                _ => settings::Tab::General,
+            };
+            settings::open(cx, tab);
+        }
+
+        // Development aid: `SCROLLBACK_DEV_HIDE=opencode` switches that source
+        // off through the settings shortly after launch, to check that the
+        // session window follows a change made elsewhere.
+        if let Ok(slug) = std::env::var("SCROLLBACK_DEV_HIDE") {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(200))
+                    .await;
+                cx.update(|cx| {
+                    let mut config = cx.global::<settings::Settings>().0.clone();
+                    config.hidden_sources.push(slug);
+                    settings::store(config, cx);
+                })
+                .ok();
+            })
+            .detach();
+        }
 
         // Development aid: `SCROLLBACK_DEV_KEYS="enter r u n"` presses those
         // keys through the window's own key handling shortly after launch and

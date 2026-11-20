@@ -26,13 +26,32 @@ pub fn claude_orange() -> Hsla {
     rgb(0xD97757).into()
 }
 
+/// The appearance chosen in the settings: 0 follows the system, 1 is light,
+/// 2 is dark. Kept here so every window can ask without being handed it.
+static MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Apply the settings' appearance choice: `system`, `light` or `dark`.
+pub fn set_mode(mode: &str) {
+    let value = match mode {
+        "light" => 1,
+        "dark" => 2,
+        _ => 0,
+    };
+    MODE.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl Theme {
-    /// The theme for the window's appearance. `SCROLLBACK_THEME=light` or
-    /// `dark` overrides the system setting.
+    /// The theme for the window's appearance, unless the settings pick one.
+    /// `SCROLLBACK_THEME=light` or `dark` overrides both, for development.
     pub fn for_appearance(appearance: WindowAppearance) -> Theme {
         match std::env::var("SCROLLBACK_THEME").as_deref() {
             Ok("light") => return Theme::light(),
             Ok("dark") => return Theme::dark(),
+            _ => {}
+        }
+        match MODE.load(std::sync::atomic::Ordering::Relaxed) {
+            1 => return Theme::light(),
+            2 => return Theme::dark(),
             _ => {}
         }
         match appearance {

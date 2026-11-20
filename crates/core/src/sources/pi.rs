@@ -14,7 +14,7 @@
 use crate::model::{Harness, Session};
 use crate::sources::{typed_prompt, walk};
 use crate::transcript::Event;
-use crate::{home, parse_ts, squash};
+use crate::{parse_ts, squash};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
@@ -25,11 +25,7 @@ use std::path::{Path, PathBuf};
 /// Where pi keeps its sessions. `PI_CODING_AGENT_DIR` moves pi's whole
 /// folder, as it does for pi itself.
 pub fn root() -> PathBuf {
-    let agent = std::env::var_os("PI_CODING_AGENT_DIR")
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".pi/agent"));
-    agent.join("sessions")
+    super::location(Harness::Pi)
 }
 
 pub fn files() -> Vec<PathBuf> {

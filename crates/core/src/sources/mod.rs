@@ -12,15 +12,32 @@ pub mod t3code;
 use crate::model::Harness;
 use std::path::{Path, PathBuf};
 
-/// Where a harness keeps its sessions.
-pub fn location(harness: Harness) -> PathBuf {
+/// The folder a harness keeps its sessions in, unless the settings name
+/// another.
+pub fn default_folder(harness: Harness) -> PathBuf {
+    let home = crate::home();
     match harness {
-        Harness::ClaudeCode => claude_code::root(),
-        Harness::Codex => codex::root().join("sessions"),
-        Harness::OpenCode => opencode::db_path(),
-        Harness::Pi => pi::root(),
-        Harness::Cursor => cursor::db_path(),
+        Harness::ClaudeCode => home.join(".claude/projects"),
+        Harness::Codex => home.join(".codex"),
+        Harness::OpenCode => home.join(".local/share/opencode"),
+        Harness::Pi => std::env::var_os("PI_CODING_AGENT_DIR")
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".pi/agent"))
+            .join("sessions"),
+        Harness::Cursor => home.join("Library/Application Support/Cursor/User"),
     }
+}
+
+/// The folder a harness's sessions are read from: the one chosen in the
+/// settings if there is one, otherwise the usual place.
+pub fn location(harness: Harness) -> PathBuf {
+    crate::Config::load()
+        .folders
+        .get(harness.slug())
+        .filter(|folder| !folder.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_folder(harness))
 }
 
 /// Every file under `root` (recursively) that `keep` accepts.

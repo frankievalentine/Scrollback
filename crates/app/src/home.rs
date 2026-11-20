@@ -5,6 +5,8 @@ mod activity;
 mod first_run;
 mod reader;
 
+use crate::app_menu::{CopyResume, ReadTranscript, Reindex, ShowActivity, ShowSessions, WriteSummary};
+use crate::settings::{self, Settings, Tab};
 use crate::theme::{claude_orange, Theme, MONO_FONT, UI_FONT};
 use reader::Reading;
 use chrono::{DateTime, Local, TimeZone};
@@ -22,9 +24,6 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// How long a session must be quiet before a summary is written for it
-/// unprompted, so a session in use is not summarised mid-thought.
-const QUIET_BEFORE_SUMMARY_MS: i64 = 10 * 60 * 1000;
 /// How often the window looks for new or changed sessions.
 const REFRESH_EVERY: Duration = Duration::from_secs(60);
 /// How many summaries are written at once.
@@ -41,7 +40,10 @@ pub fn load() -> (Vec<Session>, SharedString) {
         Ok((store.sessions(false)?, report))
     });
     match loaded {
-        Ok((sessions, report)) => {
+        Ok((mut sessions, report)) => {
+            // Sources switched off in the settings are left out entirely.
+            let hidden = Config::load().hidden_sources;
+            sessions.retain(|s| !hidden.iter().any(|slug| slug == s.origin.slug()));
             let status = format!(
                 "{} sessions\nindexed in {:.0?}",
                 sessions.len(),
@@ -133,7 +135,8 @@ impl Home {
         query: String,
         cx: &mut Context<Self>,
     ) -> Home {
-        let config = Config::load();
+        let config = cx.global::<Settings>().0.clone();
+        cx.observe_global::<Settings>(|this, cx| this.settings_changed(cx)).detach();
         // Development aids: `SCROLLBACK_FIRST_RUN=1` shows the first-run
         // screen again and `=0` skips it without saving anything, and
         // `SCROLLBACK_NO_CLAUDE=1` behaves as if the `claude` command were
@@ -506,10 +509,12 @@ impl Home {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
+        // Long enough quiet that a session in use is not summarised mid-thought.
+        let quiet_ms = i64::from(self.config.quiet_minutes.max(1)) * 60 * 1000;
         while self.busy.len() < SUMMARIES_AT_ONCE {
             let next = self.sessions.iter().position(|s| {
                 (s.summary.is_none() || s.summary_stale)
-                    && now_ms - s.updated_ms >= QUIET_BEFORE_SUMMARY_MS
+                    && now_ms - s.updated_ms >= quiet_ms
                     && !self.busy.contains(&s.key())
                     && !self.failed.contains_key(&s.key())
             });
@@ -522,29 +527,82 @@ impl Home {
 
     fn toggle_auto_summarize(&mut self, cx: &mut Context<Self>) {
         self.config.auto_summarize = !self.config.auto_summarize;
-        if let Err(err) = self.config.save() {
-            eprintln!("could not save settings: {err:#}");
+        settings::store(self.config.clone(), cx);
+        self.pump_summaries(cx);
+        self.pump_digest(cx);
+        cx.notify();
+    }
+
+    /// Take in settings changed elsewhere, such as in the settings window.
+    fn settings_changed(&mut self, cx: &mut Context<Self>) {
+        let new = cx.global::<Settings>().0.clone();
+        if new == self.config {
+            return;
+        }
+        // Which sources show, and where they are read from, decide what the
+        // index holds, so those need the sessions read again.
+        let reread =
+            new.hidden_sources != self.config.hidden_sources || new.folders != self.config.folders;
+        self.config = new;
+        if reread {
+            cx.spawn(async move |this, cx| {
+                let (sessions, status) = cx.background_executor().spawn(async { load() }).await;
+                this.update(cx, |this, cx| this.apply_sessions(sessions, status, cx))
+                    .ok();
+            })
+            .detach();
         }
         self.pump_summaries(cx);
         self.pump_digest(cx);
         cx.notify();
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    /// The menu bar's commands that act on this window. During the first
+    /// run they do nothing, as there is nothing behind it to act on yet.
+    fn commands(root: Div, cx: &mut Context<Self>) -> Div {
+        root.on_action(cx.listener(|this, _: &Reindex, _, cx| {
+            if !this.first_run {
+                this.reindex(cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &ShowSessions, _, cx| {
+            if !this.first_run {
+                this.show_sessions(cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &ShowActivity, _, cx| {
+            if !this.first_run {
+                this.show_activity(cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &WriteSummary, _, cx| {
+            if !this.first_run && this.view == View::Sessions {
+                this.summarize_selected(cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &ReadTranscript, _, cx| {
+            if !this.first_run && this.view == View::Sessions && this.reading.is_none() {
+                this.open_transcript(cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &CopyResume, _, cx| {
+            if !this.first_run && this.view == View::Sessions {
+                this.copy_resume(cx);
+            }
+        }))
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         // Keys this window acts on stop here, so they are not also offered to
-        // the system's text input. Command shortcuts it does not use (hide,
-        // minimise, switch window) are left for macOS.
-        let ours = !event.keystroke.modifiers.platform
-            || matches!(
-                event.keystroke.key.as_str(),
-                "q" | "w" | "r" | "s" | "1" | "2" | "backspace"
-            );
+        // the system's text input. Command shortcuts belong to the menu bar
+        // and arrive as its commands; only command-backspace is handled here.
+        let ours = !event.keystroke.modifiers.platform || event.keystroke.key == "backspace";
         if ours {
             cx.stop_propagation();
             self.typed_at = Instant::now();
         }
         if self.first_run {
-            self.first_run_key(event, window, cx);
+            self.first_run_key(event, cx);
             return;
         }
         let keystroke = &event.keystroke;
@@ -557,8 +615,6 @@ impl Home {
                 "]" => self.move_step(1, cx),
                 "[" => self.move_step(-1, cx),
                 "o" if !mods.platform => self.toggle_current_step(cx),
-                "q" if mods.platform => cx.quit(),
-                "w" if mods.platform => window.remove_window(),
                 _ => {}
             }
             return;
@@ -568,10 +624,6 @@ impl Home {
                 "escape" => self.show_sessions(cx),
                 "left" => self.step_range(-1, cx),
                 "right" => self.step_range(1, cx),
-                "1" if mods.platform => self.show_sessions(cx),
-                "q" if mods.platform => cx.quit(),
-                "w" if mods.platform => window.remove_window(),
-                "r" if mods.platform => self.reindex(cx),
                 _ => {
                     // Typing starts a search, which belongs to the feed.
                     let types = !(mods.platform || mods.control || mods.function)
@@ -596,11 +648,6 @@ impl Home {
             // On a message result, enter goes to that message.
             "enter" if self.selected_message().is_some() => self.open_transcript(cx),
             "enter" => self.copy_resume(cx),
-            "q" if mods.platform => cx.quit(),
-            "w" if mods.platform => window.remove_window(),
-            "r" if mods.platform => self.reindex(cx),
-            "s" if mods.platform => self.summarize_selected(cx),
-            "2" if mods.platform => self.show_activity(cx),
             "escape" => {
                 if self.query.is_empty() {
                     self.origin = None;
@@ -756,6 +803,19 @@ impl Home {
                     .gap(px(22.))
                     .child(harnesses)
                     .child(projects),
+            )
+            .child(
+                nav_row(t, false)
+                    .id("open-settings")
+                    .on_click(cx.listener(|_, _, _, cx| settings::open(cx, Tab::General)))
+                    .child(div().flex_1().child("Settings"))
+                    .child(
+                        div()
+                            .font_family(MONO_FONT)
+                            .text_size(px(11.))
+                            .text_color(t.ink3)
+                            .child("⌘,"),
+                    ),
             )
             .child(
                 nav_row(t, false)
@@ -1424,7 +1484,7 @@ impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::for_appearance(window.appearance());
         if self.first_run {
-            return div()
+            return Self::commands(div(), cx)
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::on_key))
                 .size_full()
@@ -1484,7 +1544,7 @@ impl Render for Home {
             .into_any_element()
         };
 
-        div()
+        Self::commands(div(), cx)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
@@ -1515,7 +1575,7 @@ impl Render for Home {
     }
 }
 
-fn label(text: impl Into<SharedString>, t: &Theme) -> Div {
+pub(crate) fn label(text: impl Into<SharedString>, t: &Theme) -> Div {
     let text: SharedString = text.into();
     div()
         .pb(px(6.))
@@ -1595,7 +1655,7 @@ fn outcome_mark(summary: &Summary, with_open_ends: bool, t: &Theme) -> Div {
         .child(words)
 }
 
-fn nav_row(t: &Theme, active: bool) -> Div {
+pub(crate) fn nav_row(t: &Theme, active: bool) -> Div {
     let fill = t.fill;
     div()
         .flex()
@@ -1620,7 +1680,7 @@ fn count_badge(count: usize, t: &Theme) -> Div {
         .child(count.to_string())
 }
 
-fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
+pub(crate) fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
     let (path, color): (&'static str, Hsla) = match origin {
         Origin::ClaudeCode => ("claude-code.svg", claude_orange()),
         Origin::ClaudeDesktop => ("claude.svg", claude_orange()),

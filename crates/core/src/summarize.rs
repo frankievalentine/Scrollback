@@ -14,8 +14,6 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Model alias passed to the Claude CLI.
-pub const MODEL: &str = "haiku";
 
 /// Characters of condensed transcript sent per session (roughly 7k tokens).
 pub const BUDGET: usize = 28_000;
@@ -281,7 +279,7 @@ fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Va
         // `claude` may itself be a script that needs node or another tool
         // from the same places, which a Dock-launched app's PATH lacks.
         .env("PATH", std::env::join_paths(tool_dirs()).unwrap_or_default())
-        .args(["-p", "--model", MODEL])
+        .args(["-p", "--model", crate::Config::load().model()])
         .args(["--no-session-persistence", "--output-format", "json"])
         .args(["--json-schema", &schema.to_string()])
         .args(["--system-prompt", instructions])

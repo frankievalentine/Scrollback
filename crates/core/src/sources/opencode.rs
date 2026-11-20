@@ -3,7 +3,7 @@
 
 use crate::model::{Harness, Session};
 use crate::sources::typed_prompt;
-use crate::{home, squash};
+use crate::squash;
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub fn db_path() -> PathBuf {
-    home().join(".local/share/opencode/opencode.db")
+    super::location(Harness::OpenCode).join("opencode.db")
 }
 
 /// Read every session. Returns an empty list when OpenCode is not installed.
