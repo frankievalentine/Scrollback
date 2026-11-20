@@ -87,7 +87,6 @@ A click on the menu bar icon opens recent summaries, or the week at a glance.
 | OpenCode | `~/.local/share/opencode` |
 | pi | `~/.pi/agent/sessions` |
 | Cursor | Cursor's own data folder |
-| Antigravity | `~/.gemini/antigravity` and `~/.gemini/antigravity-ide` |
 | fx | `~/.fx/sessions` |
 | Grok Build | `~/.grok/sessions` |
 | Hermes Agent | `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) |
@@ -99,16 +98,6 @@ Each folder can be changed in Settings → Sources, and any source can be
 hidden there. Folders also follow each tool's own setting where it has one,
 such as `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `FX_HOME`, `GROK_HOME`,
 `HERMES_HOME` or `COPILOT_HOME`.
-
-A few notes:
-
-- **Antigravity** encrypts its conversations. Scrollback shows each one from
-  what Antigravity leaves readable: its title, folder and times, the agent's
-  latest message, and the task list, plan and walkthrough it wrote.
-- **Orca** runs other agents' command-line tools and keeps no conversations
-  of its own, so its sessions appear under the tool that ran them.
-- fx, Grok, Hermes and Copilot are read from their documented formats
-  and have had less real-world use than the others.
 
 ## Getting started
 

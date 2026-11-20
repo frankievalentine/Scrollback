@@ -55,7 +55,6 @@ pub enum Harness {
     OpenCode,
     Pi,
     Cursor,
-    Antigravity,
     Fx,
     Grok,
     Hermes,
@@ -64,13 +63,12 @@ pub enum Harness {
 }
 
 impl Harness {
-    pub const ALL: [Harness; 11] = [
+    pub const ALL: [Harness; 10] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::OpenCode,
         Harness::Pi,
         Harness::Cursor,
-        Harness::Antigravity,
         Harness::Fx,
         Harness::Grok,
         Harness::Hermes,
@@ -86,7 +84,6 @@ impl Harness {
             Harness::OpenCode => "opencode",
             Harness::Pi => "pi",
             Harness::Cursor => "cursor",
-            Harness::Antigravity => "antigravity",
             Harness::Fx => "fx",
             Harness::Grok => "grok",
             Harness::Hermes => "hermes",
@@ -102,7 +99,6 @@ impl Harness {
             Harness::OpenCode => "OpenCode",
             Harness::Pi => "pi",
             Harness::Cursor => "Cursor",
-            Harness::Antigravity => "Antigravity",
             Harness::Fx => "fx",
             Harness::Grok => "Grok",
             Harness::Hermes => "Hermes",
@@ -124,7 +120,6 @@ impl Harness {
             Harness::OpenCode => Origin::OpenCode,
             Harness::Pi => Origin::Pi,
             Harness::Cursor => Origin::Cursor,
-            Harness::Antigravity => Origin::Antigravity,
             Harness::Fx => Origin::Fx,
             Harness::Grok => Origin::Grok,
             Harness::Hermes => Origin::Hermes,
@@ -148,7 +143,6 @@ pub enum Origin {
     OpenCode,
     Pi,
     Cursor,
-    Antigravity,
     Fx,
     Grok,
     Hermes,
@@ -159,7 +153,7 @@ pub enum Origin {
 }
 
 impl Origin {
-    pub const ALL: [Origin; 15] = [
+    pub const ALL: [Origin; 14] = [
         Origin::ClaudeCode,
         Origin::ClaudeDesktop,
         Origin::Codex,
@@ -167,7 +161,6 @@ impl Origin {
         Origin::OpenCode,
         Origin::Pi,
         Origin::Cursor,
-        Origin::Antigravity,
         Origin::Fx,
         Origin::Grok,
         Origin::Hermes,
@@ -187,7 +180,6 @@ impl Origin {
             Origin::OpenCode => "opencode",
             Origin::Pi => "pi",
             Origin::Cursor => "cursor",
-            Origin::Antigravity => "antigravity",
             Origin::Fx => "fx",
             Origin::Grok => "grok",
             Origin::Hermes => "hermes",
@@ -209,7 +201,6 @@ impl Origin {
             Origin::OpenCode => "OpenCode",
             Origin::Pi => "pi",
             Origin::Cursor => "Cursor",
-            Origin::Antigravity => "Antigravity",
             Origin::Fx => "fx",
             Origin::Grok => "Grok",
             Origin::Hermes => "Hermes",
@@ -239,7 +230,6 @@ impl Origin {
             Origin::ClaudeDesktop
                 | Origin::CodexDesktop
                 | Origin::Cursor
-                | Origin::Antigravity
                 | Origin::CopilotChat
                 | Origin::T3Code
                 | Origin::Paseo

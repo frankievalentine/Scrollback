@@ -4,7 +4,7 @@
 
 use crate::model::{Harness, Origin, Session, Summary};
 use crate::sources::{
-    antigravity, claude_code, codex, copilot, cursor, fx, grok, hermes, opencode, paseo, pi, t3code, vscode,
+    claude_code, codex, copilot, cursor, fx, grok, hermes, opencode, paseo, pi, t3code, vscode,
 };
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
@@ -174,6 +174,10 @@ impl Store {
                 db.execute(&format!("alter table sessions add column {column} {kind}"), [])?;
             }
         }
+        // Sessions from a source Scrollback no longer reads would otherwise
+        // be taken for another source's, so they are dropped.
+        let known: Vec<String> = Harness::ALL.iter().map(|h| format!("'{}'", h.slug())).collect();
+        db.execute(&format!("delete from sessions where harness not in ({})", known.join(", ")), [])?;
         let version: i64 = db.query_row("pragma user_version", [], |row| row.get(0))?;
         if version != PARSER_VERSION {
             db.execute("delete from files", [])?;
@@ -366,8 +370,7 @@ impl Store {
         // Sources small enough to read whole every time, each replacing what
         // the index held for it.
         let mut scanned: Vec<(Harness, Vec<Session>)> = Vec::new();
-        let scanners: [(Harness, fn() -> Result<Vec<Session>>); 2] =
-            [(Harness::Antigravity, antigravity::scan), (Harness::Hermes, hermes::scan)];
+        let scanners: [(Harness, fn() -> Result<Vec<Session>>); 1] = [(Harness::Hermes, hermes::scan)];
         for (harness, scan) in scanners {
             match scan() {
                 Ok(sessions) => scanned.push((harness, sessions)),

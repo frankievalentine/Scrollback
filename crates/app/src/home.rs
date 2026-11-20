@@ -1446,7 +1446,7 @@ impl Home {
                     } else {
                         match session.harness {
                             // Cursor has no way to reopen one conversation.
-                            Harness::Cursor | Harness::Antigravity | Harness::CopilotChat => {
+                            Harness::Cursor | Harness::CopilotChat => {
                                 "Copy open command"
                             }
                             _ => "Copy resume command",
@@ -2022,8 +2022,6 @@ fn resume_for(session: &Session, powershell: bool) -> String {
         Harness::Pi => format!("pi --session {}", quoted(&session.source)),
         // Cursor conversations cannot be reopened by id; open the project.
         Harness::Cursor => return format!("cursor {dir}"),
-        // Nor can Antigravity's, from outside it.
-        Harness::Antigravity => return format!("antigravity {dir}"),
         // fx resumes from a picker of this folder's sessions.
         Harness::Fx => "fx -r".to_string(),
         Harness::Grok => format!("grok --resume {}", session.id),
