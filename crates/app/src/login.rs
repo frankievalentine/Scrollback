@@ -1,7 +1,7 @@
 //! Starting Scrollback when you log in. Each system has its own place for
 //! this, and each is a plain file or setting the user can see and remove:
 //!
-//! - macOS: a launch agent, `~/Library/LaunchAgents/local.scrollback.plist`
+//! - macOS: a launch agent, `~/Library/LaunchAgents/io.github.frankievalentine.scrollback.plist`
 //! - Linux: an autostart entry, `~/.config/autostart/scrollback.desktop`
 //! - Windows: a value named Scrollback under the current user's `Run` key
 //!
@@ -36,7 +36,7 @@ mod platform {
     use super::AT_LOGIN;
     use std::path::{Path, PathBuf};
 
-    const LABEL: &str = "local.scrollback";
+    const LABEL: &str = "io.github.frankievalentine.scrollback";
 
     fn agent() -> PathBuf {
         scrollback_core::home().join("Library/LaunchAgents").join(format!("{LABEL}.plist"))

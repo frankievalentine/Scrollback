@@ -8,8 +8,7 @@
 #   scrollback-<version>-linux-<arch>.tar.gz   unpack, then run ./install.sh
 #   scrollback_<version>_<arch>.deb            sudo apt install ./scrollback_*.deb
 #
-# SCROLLBACK_MAINTAINER sets the .deb's maintainer line; the default is a
-# placeholder that should be changed before the package is shared.
+# SCROLLBACK_MAINTAINER overrides the .deb's maintainer line.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -69,7 +68,7 @@ Version: $version
 Section: devel
 Priority: optional
 Architecture: $deb_arch
-Maintainer: ${SCROLLBACK_MAINTAINER:-scrollback <scrollback@localhost>}
+Maintainer: ${SCROLLBACK_MAINTAINER:-Frankie <26727138+frankievalentine@users.noreply.github.com>}
 Installed-Size: $size
 Depends: $needs
 Recommends: libwayland-client0, mesa-vulkan-drivers

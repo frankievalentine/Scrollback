@@ -5,18 +5,29 @@
 #   scripts/bundle.sh             build target/release/bundle/Scrollback.app
 #   scripts/bundle.sh --install   also copy it into /Applications
 #
-# SCROLLBACK_BUNDLE_ID sets the bundle identifier; the default is a
-# placeholder that is fine locally and should be changed before sharing.
+# SCROLLBACK_BUNDLE_ID overrides the bundle identifier. With
+# SCROLLBACK_UNIVERSAL=1 the app runs on both Apple silicon and Intel Macs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-bundle_id="${SCROLLBACK_BUNDLE_ID:-local.scrollback}"
+bundle_id="${SCROLLBACK_BUNDLE_ID:-io.github.frankievalentine.scrollback}"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app="target/release/bundle/Scrollback.app"
 icon_source="crates/app/icon/AppIcon.svg"
 icon="crates/app/icon/AppIcon.icns"
 
-cargo build --release -p scrollback-app
+if [ "${SCROLLBACK_UNIVERSAL:-}" = "1" ]; then
+    # One program holding both architectures.
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
+    cargo build --release --locked -p scrollback-app --target aarch64-apple-darwin
+    cargo build --release --locked -p scrollback-app --target x86_64-apple-darwin
+    mkdir -p target/release
+    lipo -create -output target/release/scrollback-app \
+        target/aarch64-apple-darwin/release/scrollback-app \
+        target/x86_64-apple-darwin/release/scrollback-app
+else
+    cargo build --release -p scrollback-app
+fi
 
 # The icon is kept in the repository and only redrawn when its drawing changes.
 if [ ! -f "$icon" ] || [ "$icon_source" -nt "$icon" ]; then

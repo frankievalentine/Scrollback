@@ -99,11 +99,33 @@ hidden there. Folders also follow each tool's own setting where it has one,
 such as `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `FX_HOME`, `GROK_HOME`,
 `HERMES_HOME` or `COPILOT_HOME`.
 
-## Getting started
+## Install
 
-Scrollback is built from source for now. You need
-[Rust](https://rustup.rs) (stable) and, on a Mac, the Xcode command line tools
-(`xcode-select --install`).
+Download the latest release from the
+[Releases page](https://github.com/frankievalentine/Scrollback/releases/latest):
+
+| System | Download | Then |
+| --- | --- | --- |
+| macOS (Apple silicon and Intel) | `scrollback-<version>-macos.zip` | Unzip and move Scrollback to Applications |
+| Linux (Debian, Ubuntu) | `scrollback_<version>_amd64.deb` | `sudo apt install ./scrollback_*.deb` |
+| Linux (other) | `scrollback-<version>-linux-x86_64.tar.gz` | Unpack and run `./install.sh` |
+| Windows | `scrollback-<version>-windows-x64-setup.exe` | Run the installer; no administrator rights needed |
+
+**First launch on macOS.** Scrollback is not yet signed with an Apple Developer
+ID, so macOS asks before opening it the first time. Open it once from
+Applications by Control-clicking it and choosing Open, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Scrollback.app
+```
+
+**First launch on Windows.** SmartScreen may warn about an unrecognised app;
+choose More info, then Run anyway.
+
+## Building from source
+
+You need [Rust](https://rustup.rs) (stable) and, on a Mac, the Xcode command
+line tools (`xcode-select --install`).
 
 ### macOS
 

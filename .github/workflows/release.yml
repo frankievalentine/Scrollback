@@ -22,17 +22,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build the app
-        run: scripts/bundle.sh
-      # The app is signed for the machine that built it only. Until it is
-      # signed with a Developer ID and notarised, macOS will warn before
-      # opening it on another Mac.
+      - name: Build the app, for Apple silicon and Intel
+        run: SCROLLBACK_UNIVERSAL=1 scripts/bundle.sh
+      # The app is not signed with a Developer ID or notarised, so macOS
+      # asks before opening it the first time; the README says how.
       - name: Zip the app
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           mkdir -p target/package
           ditto -c -k --keepParent target/release/bundle/Scrollback.app \
-            "target/package/scrollback-$version-macos-$(uname -m).zip"
+            "target/package/scrollback-$version-macos.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: macos
