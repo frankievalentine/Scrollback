@@ -77,7 +77,7 @@ Scrollback is built from source for now. You need
 ### macOS
 
 ```sh
-git clone <this repository> scrollback
+git clone https://github.com/frankievalentine/Scrollback.git scrollback
 cd scrollback
 scripts/bundle.sh --install
 ```
