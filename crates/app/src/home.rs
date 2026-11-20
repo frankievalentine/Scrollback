@@ -1629,7 +1629,7 @@ fn section(title: &'static str, lines: &[String], marker: Marker, t: &Theme) -> 
 }
 
 /// How the session ended: a filled, half or empty mark, plus words.
-fn outcome_mark(summary: &Summary, with_open_ends: bool, t: &Theme) -> Div {
+pub(crate) fn outcome_mark(summary: &Summary, with_open_ends: bool, t: &Theme) -> Div {
     let icon = match summary.outcome {
         Outcome::Done => "outcome-done.svg",
         Outcome::Partial => "outcome-partial.svg",
@@ -1699,7 +1699,7 @@ pub(crate) fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
 }
 
 /// The line of small facts under a session: harness, project, branch, time.
-fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
+pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
     let mut row = div()
         .flex()
         .items_center()
@@ -1757,13 +1757,13 @@ fn local(ms: i64) -> Option<DateTime<Local>> {
     Local.timestamp_millis_opt(ms).single()
 }
 
-fn clock(ms: i64) -> String {
+pub(crate) fn clock(ms: i64) -> String {
     local(ms)
         .map(|t| t.format("%H:%M").to_string())
         .unwrap_or_default()
 }
 
-fn day_label(ms: i64) -> String {
+pub(crate) fn day_label(ms: i64) -> String {
     let Some(then) = local(ms) else {
         return String::new();
     };
@@ -1795,7 +1795,7 @@ fn compact_number(n: u64) -> String {
 }
 
 /// A shell command that reopens the session in its own harness.
-fn resume_command(session: &Session) -> String {
+pub(crate) fn resume_command(session: &Session) -> String {
     let dir = format!("'{}'", session.cwd.replace('\'', "'\\''"));
     let resume = match session.harness {
         Harness::ClaudeCode => format!("claude --resume {}", session.id),

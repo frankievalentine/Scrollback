@@ -21,6 +21,7 @@ actions!(
         CloseWindow,
         Minimize,
         Zoom,
+        ShowWindow,
         ShowSessions,
         ShowActivity,
         ReadTranscript,
@@ -36,6 +37,9 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
     cx.on_action(|_: &OpenSettings, cx| settings::open(cx, Tab::General));
     cx.on_action(|_: &About, cx| settings::open(cx, Tab::About));
+    cx.on_action(|_: &ShowWindow, cx| {
+        crate::open_main(cx, None);
+    });
     // These act on whichever window is in front.
     cx.on_action(|_: &CloseWindow, cx| in_front(cx, |window| window.remove_window()));
     cx.on_action(|_: &Minimize, cx| in_front(cx, |window| window.minimize_window()));
@@ -49,6 +53,7 @@ pub fn install(cx: &mut App) {
         KeyBinding::new("cmd-r", Reindex, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
         KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("cmd-0", ShowWindow, None),
         KeyBinding::new("cmd-1", ShowSessions, None),
         KeyBinding::new("cmd-2", ShowActivity, None),
         KeyBinding::new("cmd-s", WriteSummary, None),
@@ -100,6 +105,8 @@ pub fn install(cx: &mut App) {
             items: vec![
                 MenuItem::action("Minimize", Minimize),
                 MenuItem::action("Zoom", Zoom),
+                MenuItem::separator(),
+                MenuItem::action("Sessions Window", ShowWindow),
             ],
         },
     ]);

@@ -153,6 +153,7 @@ impl SettingsView {
 
     fn general(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let auto = self.config.auto_summarize;
+        let in_menu_bar = self.config.menu_bar_icon;
         let quiet = self.config.quiet_minutes;
         let mut wait = segmented(t);
         for minutes in QUIET_MINUTES {
@@ -194,6 +195,15 @@ impl SettingsView {
                 t,
             ))
             .child(row("Appearance", "Light, dark, or whatever the Mac is set to.", look, t))
+            .child(row(
+                "Menu bar icon",
+                "Keep scrollback in the menu bar. It stays running there when its window is \
+                 closed, and a click opens recent sessions.",
+                switch("menu-bar-icon", in_menu_bar, t).on_click(
+                    cx.listener(move |this, _, _, cx| this.change(cx, |c| c.menu_bar_icon = !in_menu_bar)),
+                ),
+                t,
+            ))
     }
 
     fn sources(&self, t: &Theme, cx: &mut Context<Self>) -> Div {

@@ -86,8 +86,15 @@ impl Home {
     }
 
     /// Leave the activity view for the feed, with one session selected.
-    fn show_session(&mut self, key: &str, cx: &mut Context<Self>) {
+    pub(crate) fn show_session(&mut self, key: &str, cx: &mut Context<Self>) {
         self.view = View::Sessions;
+        self.reading = None;
+        // A filter would hide the session being asked for.
+        if self.origin.is_some() || self.project.is_some() {
+            self.origin = None;
+            self.project = None;
+            self.recompute();
+        }
         if !self.query.is_empty() {
             self.query.clear();
             self.recompute();

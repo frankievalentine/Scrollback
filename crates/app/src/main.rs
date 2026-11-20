@@ -1,12 +1,15 @@
 mod app_menu;
+mod background;
 mod home;
 mod markdown;
+mod popover;
 mod settings;
 mod theme;
+mod tray;
 
 use gpui::{
-    point, prelude::*, px, size, App, Application, AssetSource, Bounds, SharedString,
-    TitlebarOptions, WindowBounds, WindowOptions,
+    point, prelude::*, px, size, App, Application, AssetSource, Bounds, Global, SharedString,
+    TitlebarOptions, WindowBounds, WindowHandle, WindowOptions,
 };
 use home::Home;
 use std::borrow::Cow;
@@ -28,6 +31,7 @@ impl AssetSource for Assets {
             "view-activity.svg" => Some(include_bytes!("../assets/view-activity.svg")),
             "check.svg" => Some(include_bytes!("../assets/check.svg")),
             "mark.svg" => Some(include_bytes!("../assets/mark.svg")),
+            "search.svg" => Some(include_bytes!("../assets/search.svg")),
             "claude.svg" => Some(include_bytes!("../assets/claude.svg")),
             "openai.svg" => Some(include_bytes!("../assets/openai.svg")),
             "cursor.svg" => Some(include_bytes!("../assets/cursor.svg")),
@@ -42,25 +46,55 @@ impl AssetSource for Assets {
     }
 }
 
-fn main() {
+/// The session window, while it is open.
+pub struct MainWindow(pub Option<WindowHandle<Home>>);
+
+impl Global for MainWindow {}
+
+/// Bring the session window forward, opening it if it is closed, and select
+/// a session in it when one is named.
+pub fn open_main(cx: &mut App, select: Option<String>) -> Option<WindowHandle<Home>> {
+    open_main_with(cx, select, String::new())
+}
+
+fn open_main_with(
+    cx: &mut App,
+    select: Option<String>,
+    query: String,
+) -> Option<WindowHandle<Home>> {
+    // SCROLLBACK_BACKGROUND=1 opens windows without taking the keyboard, for
+    // checking the app while someone is typing elsewhere.
+    let quiet = std::env::var_os("SCROLLBACK_BACKGROUND").is_some();
+    let pick = |home: &mut Home, cx: &mut gpui::Context<Home>| {
+        if let Some(key) = &select {
+            home.show_session(key, cx);
+        }
+    };
+    if let Some(window) = cx.global::<MainWindow>().0 {
+        let shown = window.update(cx, |home, window, cx| {
+            window.activate_window();
+            pick(home, cx);
+        });
+        if shown.is_ok() {
+            if !quiet {
+                cx.activate(true);
+            }
+            return Some(window);
+        }
+    }
+
     // The index refresh takes well under a second, so it runs before the
     // window opens and the first frame already shows real sessions.
     let (sessions, status) = home::load();
-    // `scrollback-app some words` opens with that search already typed.
-    let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
-
-    Application::new().with_assets(Assets).run(move |cx: &mut App| {
-        settings::install(cx);
-        app_menu::install(cx);
-
-        // Development aid: `SCROLLBACK_HEIGHT=1300` opens a taller window, to
-        // see a whole view in one screenshot.
-        let height = std::env::var("SCROLLBACK_HEIGHT")
-            .ok()
-            .and_then(|h| h.parse::<f32>().ok())
-            .unwrap_or(820.);
-        let bounds = Bounds::centered(None, size(px(1180.), px(height)), cx);
-        let opened = cx.open_window(
+    // Development aid: `SCROLLBACK_HEIGHT=1300` opens a taller window, to
+    // see a whole view in one screenshot.
+    let height = std::env::var("SCROLLBACK_HEIGHT")
+        .ok()
+        .and_then(|h| h.parse::<f32>().ok())
+        .unwrap_or(820.);
+    let bounds = Bounds::centered(None, size(px(1180.), px(height)), cx);
+    let window = cx
+        .open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(760.), px(480.))),
@@ -78,7 +112,42 @@ fn main() {
                 view
             },
         )
-        .expect("opening the main window");
+        .ok()?;
+    cx.set_global(MainWindow(Some(window)));
+    window.update(cx, |home, _, cx| pick(home, cx)).ok();
+    if !quiet {
+        cx.activate(true);
+    }
+    Some(window)
+}
+
+fn main() {
+    // `scrollback-app some words` opens with that search already typed.
+    let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+
+    let app = Application::new().with_assets(Assets);
+    // Clicking the Dock icon when the window is closed brings it back.
+    app.on_reopen(|cx| {
+        open_main(cx, None);
+    });
+    app.run(move |cx: &mut App| {
+        settings::install(cx);
+        app_menu::install(cx);
+        popover::install(cx);
+        cx.set_global(MainWindow(None));
+
+        let opened = open_main_with(cx, None, query).expect("opening the main window");
+
+        // With the icon in the menu bar the app outlives its window. Without
+        // the icon, closing the last window quits, as before.
+        tray::install(cx);
+        background::start(cx);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() && !tray::showing(cx) {
+                cx.quit();
+            }
+        })
+        .detach();
 
         // Development aid: `SCROLLBACK_DEV_SETTINGS=sources` opens the settings
         // window on that page at launch.
@@ -110,44 +179,57 @@ fn main() {
             .detach();
         }
 
+        // Development aid: `SCROLLBACK_DEV_POPOVER=1` opens the popover at
+        // launch, under the menu bar icon when there is one.
+        let with_popover = std::env::var_os("SCROLLBACK_DEV_POPOVER").is_some();
+        if with_popover {
+            cx.spawn(async move |cx| {
+                // The icon takes a moment to find its place in the menu bar.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(400))
+                    .await;
+                cx.update(|cx| {
+                    let icon = tray::rect(cx);
+                    eprintln!("menu bar icon at {icon:?}");
+                    popover::toggle(icon, cx);
+                })
+                .ok();
+            })
+            .detach();
+        }
+
         // Development aid: `SCROLLBACK_DEV_KEYS="enter r u n"` presses those
-        // keys through the window's own key handling shortly after launch and
-        // logs what the view holds after each, so typing can be checked in a
-        // window that never takes the keyboard.
+        // keys through a window's own key handling shortly after launch and
+        // logs what its view holds after each, so typing can be checked in a
+        // window that never takes the keyboard. With the popover open, the
+        // keys go to it instead of the session window.
         if let Ok(keys) = std::env::var("SCROLLBACK_DEV_KEYS") {
             cx.spawn(async move |cx| {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(700))
+                    .timer(std::time::Duration::from_millis(900))
                     .await;
                 for key in keys.split_whitespace() {
                     let Ok(keystroke) = gpui::Keystroke::parse(key) else {
                         eprintln!("key {key}: not a key");
                         continue;
                     };
+                    let panel = cx.update(|cx| popover::window(cx)).ok().flatten();
+                    let target: gpui::AnyWindowHandle = match panel.filter(|_| with_popover) {
+                        Some(panel) => panel.into(),
+                        None => opened.into(),
+                    };
                     let handled = cx
-                        .update_window(opened.into(), |_, window, cx| {
-                            window.dispatch_keystroke(keystroke, cx)
-                        })
+                        .update_window(target, |_, window, cx| window.dispatch_keystroke(keystroke, cx))
                         .unwrap_or(false);
-                    let state = opened
-                        .read_with(cx, |home, _| home.dev_state())
-                        .unwrap_or_default();
+                    let state = match panel.filter(|_| with_popover) {
+                        Some(panel) => panel.read_with(cx, |panel, _| panel.dev_state()),
+                        None => opened.read_with(cx, |home, _| home.dev_state()),
+                    }
+                    .unwrap_or_else(|_| "window closed".to_string());
                     eprintln!("key {key}: handled={handled} {state}");
                 }
             })
             .detach();
-        }
-
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        // SCROLLBACK_BACKGROUND=1 opens the window without taking focus, for
-        // checking the app while someone is typing elsewhere.
-        if std::env::var_os("SCROLLBACK_BACKGROUND").is_none() {
-            cx.activate(true);
         }
     });
 }
