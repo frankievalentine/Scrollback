@@ -754,75 +754,153 @@ impl Popover {
     /// was left open.
     fn activity(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let week = &self.week;
-        let figure = |value: String, name: &'static str| {
+        let days = week_days(&self.sessions);
+        let today = days.last().cloned().unwrap_or_default();
+
+        // The figures: today, and the week, each as sessions and time.
+        let figure = |name: &'static str, sessions: usize, time: String| {
             div()
-                .flex_1()
-                .min_w(px(0.))
                 .flex()
                 .flex_col()
-                .gap(px(1.))
-                .px(px(11.))
-                .py(px(8.))
-                .rounded(px(8.))
-                .bg(t.fill)
+                .gap(px(0.))
+                .child(label(name, t))
                 .child(
                     div()
                         .text_size(px(text::LEAD))
                         .line_height(px(20.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(value),
+                        .child(time),
                 )
-                .child(div().text_size(px(text::CAPTION)).text_color(t.ink3).child(name))
+                .child(
+                    div()
+                        .text_size(px(text::CAPTION))
+                        .text_color(t.ink3)
+                        .child(match sessions {
+                            1 => "1 session".to_string(),
+                            n => format!("{n} sessions"),
+                        }),
+                )
         };
         let figures = div()
+            .w(px(150.))
+            .flex_shrink_0()
             .flex()
-            .gap(px(8.))
-            .child(figure(self.today.to_string(), "sessions today"))
-            .child(figure(week.sessions.to_string(), "this week"))
-            .child(figure(duration_label(week.active_ms), "in use this week"))
-            .child(figure(compact_number(week.tokens), "tokens this week"));
-
-        // A bar a day, today on the right and picked out.
-        let busiest = week.buckets.iter().map(|b| b.sessions).max().unwrap_or(0).max(1);
-        let mut bars = div().h(px(76.)).flex().items_end().gap(px(6.));
-        for bucket in &week.buckets {
-            let share = bucket.sessions as f32 / busiest as f32;
-            let height = if bucket.sessions == 0 { 2. } else { (share * 36.).max(4.) };
-            bars = bars.child(
+            .flex_col()
+            .justify_between()
+            .child(figure("Today", today.sessions, duration_label(today.active_ms)))
+            .child(figure("This week", week.sessions, duration_label(week.active_ms)))
+            .child(
                 div()
+                    .font_family(mono())
+                    .text_size(px(text::CAPTION))
+                    .text_color(t.ink3)
+                    .child(format!("{} tokens", compact_number(week.tokens))),
+            );
+
+        // Time in use each day, as a column filling a track, so a quiet day
+        // still has its place. A line marks the average over the days used.
+        const TRACK: f32 = 80.;
+        let longest = days.iter().map(|day| day.active_ms).max().unwrap_or(0).max(1);
+        let used: Vec<i64> = days.iter().map(|day| day.active_ms).filter(|ms| *ms > 0).collect();
+        let average = if used.is_empty() { 0 } else { used.iter().sum::<i64>() / used.len() as i64 };
+        let mut columns = div().relative().flex_1().flex().justify_between().gap(px(6.));
+        for (i, day) in days.iter().enumerate() {
+            let is_today = i + 1 == days.len();
+            let height = match day.active_ms {
+                0 => 0.,
+                ms => (ms as f32 / longest as f32 * TRACK).max(6.),
+            };
+            let tip = format!(
+                "{}: {}, {}",
+                day.date.format("%A"),
+                match day.sessions {
+                    1 => "1 session".to_string(),
+                    n => format!("{n} sessions"),
+                },
+                duration_label(day.active_ms)
+            );
+            columns = columns.child(
+                div()
+                    .id(("week-day", i))
                     .flex_1()
-                    .h_full()
                     .flex()
                     .flex_col()
-                    .justify_end()
                     .items_center()
-                    .gap(px(3.))
+                    .gap(px(6.))
+                    .tooltip(ui::tip(tip))
                     .child(
                         div()
-                            .font_family(mono())
-                            .text_size(px(text::CAPTION))
-                            .text_color(t.ink3)
-                            .child(if bucket.sessions == 0 { String::new() } else { bucket.sessions.to_string() }),
+                            .w(px(18.))
+                            .h(px(TRACK))
+                            .flex()
+                            .flex_col()
+                            .justify_end()
+                            .rounded(px(5.))
+                            .bg(t.line.opacity(0.5))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(height))
+                                    .rounded(px(5.))
+                                    .bg(if is_today { t.accent } else { t.ink3 }),
+                            ),
                     )
                     .child(
                         div()
-                            .w(px(22.))
-                            .h(px(height))
-                            .rounded(px(3.))
-                            .bg(if bucket.current { t.accent } else { t.ink3.opacity(0.45) }),
-                    )
-                    .child(
-                        div()
                             .text_size(px(text::CAPTION))
-                            .text_color(if bucket.current { t.ink } else { t.ink3 })
-                            .child(if bucket.current {
-                                "today".to_string()
-                            } else {
-                                bucket.first_day.format("%a").to_string()
-                            }),
+                            .text_color(if is_today { t.ink } else { t.ink3 })
+                            .when(is_today, |el| el.font_weight(FontWeight::MEDIUM))
+                            .child(day.date.format("%a").to_string()),
                     ),
             );
         }
+        if average > 0 {
+            let from_top = TRACK - average as f32 / longest as f32 * TRACK;
+            columns = columns.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .right(px(0.))
+                    .top(px(from_top))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().flex_1().h(px(1.)).bg(t.ink3.opacity(0.5))),
+            );
+        }
+        // The chart, with what the line means said above it.
+        let graph = div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .child(label("Time in use", t))
+                    .children((average > 0).then(|| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(px(text::CAPTION))
+                            .text_color(t.ink3)
+                            .child(div().w(px(12.)).h(px(1.)).bg(t.ink3.opacity(0.5)))
+                            .child(format!("{} a day on average", duration_label(average)))
+                    })),
+            )
+            .child(columns);
+        let chart = div()
+            .flex()
+            .gap(px(20.))
+            .px(px(14.))
+            .py(px(12.))
+            .rounded(px(10.))
+            .bg(t.fill)
+            .child(figures)
+            .child(graph);
 
         // Where the week's sessions came from.
         let most = week.by_origin.first().map_or(1, |share| share.sessions.max(1));
@@ -926,16 +1004,15 @@ impl Popover {
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(10.))
             .px(px(16.))
             .py(px(12.))
-            .child(figures)
-            .child(bars)
+            .child(chart)
             .child(
                 div()
                     .flex()
                     .gap(px(24.))
-                    .pt(px(10.))
+                    .pt(px(8.))
                     .border_t_1()
                     .border_color(t.line)
                     .child(sources)
@@ -1041,4 +1118,34 @@ fn action(
                     .child(key),
             )
         })
+}
+
+/// One day of the last seven: its date, how many sessions were last used on
+/// it, and their time in use.
+#[derive(Clone, Default)]
+struct Day {
+    date: chrono::NaiveDate,
+    sessions: usize,
+    active_ms: i64,
+}
+
+/// The last seven days, oldest first and today last. A session counts
+/// towards the day it was last used, as in the window's activity view.
+fn week_days(sessions: &[Session]) -> Vec<Day> {
+    use chrono::{Duration, Local, TimeZone};
+    let today = Local::now().date_naive();
+    let mut days: Vec<Day> = (0..7)
+        .rev()
+        .map(|back| Day { date: today - Duration::days(back), ..Day::default() })
+        .collect();
+    for session in sessions {
+        let Some(date) = Local.timestamp_millis_opt(session.updated_ms).single().map(|t| t.date_naive()) else {
+            continue;
+        };
+        if let Some(day) = days.iter_mut().find(|day| day.date == date) {
+            day.sessions += 1;
+            day.active_ms += session.active_ms;
+        }
+    }
+    days
 }
