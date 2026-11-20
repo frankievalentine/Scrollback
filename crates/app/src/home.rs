@@ -1200,11 +1200,13 @@ impl Home {
     fn compact(&self, hit: usize, ix: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let found = &self.hits[hit];
         let session = &self.sessions[found.index];
-        let blurb = match &session.summary {
-            Some(summary) => summary.summary.clone(),
-            None if session.first_prompt != session.title => session.first_prompt.clone(),
-            None => String::new(),
-        };
+        // One line about it: the summary's, when there is one. Without one the
+        // title is already the first prompt, so nothing more is said.
+        let blurb = session
+            .summary
+            .as_ref()
+            .map(|summary| summary.summary.clone())
+            .unwrap_or_default();
         let selected = self.selected == Some(hit);
         let fill = t.fill;
         div()
@@ -1212,7 +1214,7 @@ impl Home {
             .flex()
             .gap(px(20.))
             .px(px(20.))
-            .py(px(14.))
+            .py(px(12.))
             .rounded(px(10.))
             .when(selected, |el| el.bg(fill))
             .cursor_pointer()
@@ -1234,7 +1236,7 @@ impl Home {
                     .min_w(px(0.))
                     .flex()
                     .flex_col()
-                    .gap(px(5.))
+                    .gap(px(4.))
                     .child(
                         div()
                             .flex()
@@ -1261,7 +1263,7 @@ impl Home {
                             ),
                     )
                     .when(!blurb.is_empty(), |el| {
-                        el.child(div().text_color(t.ink2).line_clamp(2).text_ellipsis().child(blurb))
+                        el.child(div().text_color(t.ink2).line_clamp(1).text_ellipsis().child(blurb))
                     })
                     .child(facts(session, t, false)),
             )
@@ -1275,36 +1277,12 @@ impl Home {
         let busy = self.busy.contains(&key);
         let copied = self.copied == Some(hit);
 
-        let mut stats = div()
-            .flex()
-            .flex_wrap()
-            .gap_x(px(18.))
-            .gap_y(px(4.))
-            .font_family(mono())
-            .text_size(px(text::CAPTION))
-            .text_color(t.ink3)
-            .child(format!("{} prompts", session.user_turns))
-            .child(format!("{} replies", session.assistant_turns))
-            .child(format!("{} tool calls", session.tool_calls))
-            .child(format!("{} tokens", compact_number(session.tokens())));
-        // Context re-read from the cache on every turn; far larger than the
-        // work itself, so it is shown apart.
-        if session.tokens_cached > 0 {
-            stats = stats.child(format!("{} cached", compact_number(session.tokens_cached)));
-        }
-        if let Some(cost) = session.cost_usd {
-            stats = stats.child(format!("${cost:.2}"));
-        }
-        if let Some(model) = &session.model {
-            stats = stats.child(model.clone());
-        }
-
         let mut card = div()
             .flex_1()
             .min_w(px(0.))
             .flex()
             .flex_col()
-            .gap(px(18.))
+            .gap(px(12.))
             .child(
                 div()
                     .flex()
@@ -1316,7 +1294,7 @@ impl Home {
                         session
                             .summary
                             .as_ref()
-                            .map(|summary| outcome_mark(summary, true, t)),
+                            .map(|summary| outcome_mark(summary, false, t)),
                     ),
             )
             .child(
@@ -1331,94 +1309,34 @@ impl Home {
                     )),
             );
 
+        // A glance: what the session was, how it ended, and anything left to
+        // pick up. The rest of the summary is in the transcript view.
         match &session.summary {
             Some(summary) => {
                 card = card.child(
                     div()
                         .text_size(px(text::LEAD))
-                        .line_height(px(24.))
+                        .line_height(px(23.))
                         .text_color(t.ink2)
                         .child(summary.summary.clone()),
                 );
-                let mut grid = div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(22.))
-                    .pt(px(20.))
-                    .border_t_1()
-                    .border_color(t.line)
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(40.))
-                            .child(section(
-                                "You asked",
-                                std::slice::from_ref(&summary.asked),
-                                Marker::None,
-                                t,
-                            ))
-                            .child(section("What happened", &summary.happened, Marker::Number, t)),
-                    );
-                if !summary.open_ends.is_empty() || !summary.friction.is_empty() {
-                    grid = grid.child(
-                        div()
-                            .flex()
-                            .gap(px(40.))
-                            .child(section("Open ends", &summary.open_ends, Marker::Dash, t))
-                            .child(section("Friction", &summary.friction, Marker::Dash, t)),
-                    );
-                }
-                card = card.child(grid);
-                if !summary.files.is_empty() {
-                    let shown = summary.files.len().min(6);
-                    let mut files = div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.))
-                        .font_family(mono())
-                        .text_size(px(text::CAPTION))
-                        .text_color(t.ink2);
-                    for file in &summary.files[..shown] {
-                        files = files.child(div().one_line().child(file.clone()));
-                    }
-                    if summary.files.len() > shown {
-                        files = files.child(
-                            div()
-                                .text_color(t.ink3)
-                                .child(format!("and {} more", summary.files.len() - shown)),
-                        );
-                    }
-                    card = card.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(label("Files edited", t))
-                            .child(files),
-                    );
+                if !summary.open_ends.is_empty() {
+                    card = card.child(open_ends(&summary.open_ends, 2, t));
                 }
             }
             None => {
                 card = card.child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .pt(px(18.))
-                        .border_t_1()
-                        .border_color(t.line)
-                        .child(label("You asked", t))
-                        .child(
-                            div()
-                                .text_size(px(text::LEAD))
-                                .line_height(px(23.))
-                                .text_color(t.ink2)
-                                .line_clamp(6).text_ellipsis()
-                                .child(if session.first_prompt.is_empty() {
-                                    "No typed prompt was recorded for this session.".to_string()
-                                } else {
-                                    session.first_prompt.clone()
-                                }),
-                        ),
+                        .text_size(px(text::LEAD))
+                        .line_height(px(23.))
+                        .text_color(t.ink2)
+                        .line_clamp(3)
+                        .text_ellipsis()
+                        .child(if session.first_prompt.is_empty() {
+                            "No typed prompt was recorded for this session.".to_string()
+                        } else {
+                            session.first_prompt.clone()
+                        }),
                 );
             }
         }
@@ -1427,22 +1345,25 @@ impl Home {
             "Writing summary…"
         } else if session.summary.is_none() {
             "Write summary"
-        } else if session.summary_stale {
-            "Update summary"
         } else {
-            "Rewrite summary"
+            "Update summary"
         };
+        // The summary button is offered only when there is something to do:
+        // none written yet, or the session has moved on. Rewriting a current
+        // one is in the Session menu.
+        let offer_summary = busy || session.summary.is_none() || session.summary_stale;
         let mut actions = div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap(px(8.))
+            .pt(px(6.))
             .child(
                 div()
                     .id("copy-resume")
                     .reachable(t)
-                    .h(px(36.))
-                    .px(px(16.))
+                    .h(px(32.))
+                    .px(px(13.))
                     .flex()
                     .items_center()
                     .rounded(px(8.))
@@ -1454,13 +1375,14 @@ impl Home {
                     .hover(|style| style.opacity(0.9))
                     .active(|style| style.opacity(0.75))
                     .on_click(cx.listener(|this, _, _, cx| this.copy_resume(cx)))
+                    .tooltip(ui::tip(resume_command(session)))
                     .child(if copied {
-                        "Copied to clipboard".to_string()
+                        "Copied"
                     } else {
                         match session.harness {
                             // Cursor has no way to reopen one conversation.
-                            Harness::Cursor => "Copy command to open the project in Cursor".to_string(),
-                            harness => format!("Copy resume command for {}", harness.name()),
+                            Harness::Cursor => "Copy open command",
+                            _ => "Copy resume command",
                         }
                     }),
             )
@@ -1468,8 +1390,8 @@ impl Home {
                 div()
                     .id("read-transcript")
                     .reachable(t)
-                    .h(px(36.))
-                    .px(px(16.))
+                    .h(px(32.))
+                    .px(px(13.))
                     .flex()
                     .items_center()
                     .rounded(px(8.))
@@ -1483,12 +1405,12 @@ impl Home {
                     .on_click(cx.listener(|this, _, _, cx| this.open_transcript(cx)))
                     .child("Read transcript"),
             )
-            .child(
+            .when(offer_summary, |el| el.child(
                 div()
                     .id("write-summary")
                     .reachable(t)
-                    .h(px(36.))
-                    .px(px(16.))
+                    .h(px(32.))
+                    .px(px(13.))
                     .flex()
                     .items_center()
                     .rounded(px(8.))
@@ -1506,7 +1428,7 @@ impl Home {
                             .on_click(cx.listener(|this, _, _, cx| this.summarize_selected(cx)))
                     })
                     .child(summary_action),
-            );
+            ));
         if let Some(covers) = covers(session).filter(|_| !busy) {
             actions = actions.child(
                 div()
@@ -1516,19 +1438,7 @@ impl Home {
             );
         }
 
-        card = card
-            .child(stats)
-            .child(
-                div()
-                    .font_family(mono())
-                    .text_size(px(text::CAPTION))
-                    .text_color(t.ink3)
-                    .id("card-folder")
-                    .tooltip(ui::tip(session.cwd.clone()))
-                    .one_line()
-                    .child(ui::middle(&session.cwd, 96)),
-            )
-            .child(actions);
+        card = card.child(actions);
         if let Some(error) = self.failed.get(&key) {
             card = card.child(
                 div()
@@ -1545,7 +1455,7 @@ impl Home {
                 .gap(px(20.))
                 .pl(px(20.))
                 .pr(px(30.))
-                .py(px(26.))
+                .py(px(20.))
                 .rounded(px(14.))
                 .bg(t.raise)
                 .shadow(t.card_shadow.clone())
@@ -1706,14 +1616,14 @@ pub(crate) fn label(text: impl Into<SharedString>, t: &Theme) -> Div {
         .child(SharedString::from(text.to_uppercase()))
 }
 
-enum Marker {
+pub(super) enum Marker {
     None,
     Number,
     Dash,
 }
 
 /// One labelled column of the summary: a heading and its lines.
-fn section(title: &'static str, lines: &[String], marker: Marker, t: &Theme) -> Div {
+pub(super) fn section(title: &'static str, lines: &[String], marker: Marker, t: &Theme) -> Div {
     let mut column = div()
         .flex_1()
         .min_w(px(0.))
@@ -1747,6 +1657,62 @@ fn section(title: &'static str, lines: &[String], marker: Marker, t: &Theme) -> 
         };
     }
     column
+}
+
+/// What is left to pick up, at most `shown` of them, one line each.
+fn open_ends(lines: &[String], shown: usize, t: &Theme) -> Div {
+    let mut list = div()
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .text_size(px(text::SMALL))
+        .text_color(t.ink2);
+    for line in lines.iter().take(shown) {
+        list = list.child(
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(div().flex_shrink_0().text_color(t.ink3).child("–"))
+                .child(div().flex_1().min_w(px(0.)).line_clamp(1).text_ellipsis().child(line.clone())),
+        );
+    }
+    if lines.len() > shown {
+        list = list.child(
+            div()
+                .pl(px(16.))
+                .text_color(t.ink3)
+                .child(format!("and {} more in the transcript view", lines.len() - shown)),
+        );
+    }
+    list
+}
+
+/// The session's numbers: turns, tool calls, tokens, cost and model.
+pub(super) fn stats(session: &Session, t: &Theme) -> Div {
+    let mut stats = div()
+        .flex()
+        .flex_wrap()
+        .gap_x(px(18.))
+        .gap_y(px(4.))
+        .font_family(mono())
+        .text_size(px(text::CAPTION))
+        .text_color(t.ink3)
+        .child(format!("{} prompts", session.user_turns))
+        .child(format!("{} replies", session.assistant_turns))
+        .child(format!("{} tool calls", session.tool_calls))
+        .child(format!("{} tokens", compact_number(session.tokens())));
+    // Context re-read from the cache on every turn; far larger than the
+    // work itself, so it is shown apart.
+    if session.tokens_cached > 0 {
+        stats = stats.child(format!("{} cached", compact_number(session.tokens_cached)));
+    }
+    if let Some(cost) = session.cost_usd {
+        stats = stats.child(format!("${cost:.2}"));
+    }
+    if let Some(model) = &session.model {
+        stats = stats.child(model.clone());
+    }
+    stats
 }
 
 /// How the session ended: a filled, half or empty mark, plus words.

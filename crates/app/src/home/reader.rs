@@ -3,7 +3,7 @@
 //! session's summary says where its steps begin, the transcript is cut into
 //! those steps, each under a heading that opens and closes.
 
-use super::{facts, outcome_mark, Home};
+use super::{facts, outcome_mark, section, stats, Home, Marker};
 use crate::markdown;
 use crate::theme::{text, Theme, mono};
 use crate::ui::{OneLine, Reachable};
@@ -476,6 +476,82 @@ impl Home {
                         .child(summary.summary.clone()),
                 );
             }
+            // The rest of the summary, which the card leaves out.
+            if let Some(summary) = &session.summary {
+                let mut details = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.))
+                    .pt(px(14.))
+                    .border_t_1()
+                    .border_color(t.line)
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(40.))
+                            .child(section("You asked", std::slice::from_ref(&summary.asked), Marker::None, &t))
+                            .child(match reading.steps.is_empty() {
+                                // Without steps to group by, the steps are listed here.
+                                true => section("What happened", &summary.happened, Marker::Number, &t),
+                                false => section("Open ends", &summary.open_ends, Marker::Dash, &t),
+                            }),
+                    );
+                let mut more = div().flex().gap(px(40.));
+                let mut any = false;
+                if reading.steps.is_empty() && !summary.open_ends.is_empty() {
+                    more = more.child(section("Open ends", &summary.open_ends, Marker::Dash, &t));
+                    any = true;
+                }
+                if !summary.friction.is_empty() {
+                    more = more.child(section("Friction", &summary.friction, Marker::Dash, &t));
+                    any = true;
+                }
+                if !summary.files.is_empty() {
+                    let mut files = div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.))
+                        .child(super::label("Files edited", &t));
+                    for file in summary.files.iter().take(8) {
+                        files = files.child(
+                            div()
+                                .font_family(mono())
+                                .text_size(px(text::CAPTION))
+                                .text_color(t.ink2)
+                                .one_line()
+                                .child(file.clone()),
+                        );
+                    }
+                    if summary.files.len() > 8 {
+                        files = files.child(
+                            div()
+                                .text_size(px(text::CAPTION))
+                                .text_color(t.ink3)
+                                .child(format!("and {} more", summary.files.len() - 8)),
+                        );
+                    }
+                    more = more.child(files);
+                    any = true;
+                }
+                if any {
+                    details = details.child(more);
+                }
+                head = head.child(details);
+            }
+            head = head
+                .child(stats(session, &t))
+                .child(
+                    div()
+                        .id("reader-folder")
+                        .font_family(mono())
+                        .text_size(px(text::CAPTION))
+                        .text_color(t.ink3)
+                        .tooltip(crate::ui::tip(session.cwd.clone()))
+                        .one_line()
+                        .child(crate::ui::middle(&session.cwd, 96)),
+                );
             if !reading.steps.is_empty() {
                 head = head.child(
                     div()
