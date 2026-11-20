@@ -29,8 +29,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const REFRESH_EVERY: Duration = Duration::from_secs(60);
 /// How many summaries are written at once.
 const SUMMARIES_AT_ONCE: usize = 2;
-/// Half a blink of the search caret.
-const CARET_BLINK: Duration = Duration::from_millis(530);
 /// How long to hold off after the Claude plan limit is reported.
 const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 
@@ -217,7 +215,7 @@ impl Home {
         // Blink the search caret, but only while it is on screen in the
         // window being typed into, so an idle window draws nothing.
         cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(CARET_BLINK).await;
+            cx.background_executor().timer(ui::CARET_BLINK).await;
             let alive = this.update(cx, |this, cx| {
                 let showing = this.window_active
                     && !this.first_run
@@ -923,13 +921,8 @@ impl Home {
         // The caret shows that typing anywhere in the window lands here.
         // It blinks, holds steady while keys are arriving, and is hidden in
         // a window that does not have the keyboard.
-        let lit = self.window_active && (self.caret_lit || self.typed_at.elapsed() < CARET_BLINK);
-        let caret = div()
-            .w(px(2.))
-            .h(px(18.))
-            .flex_shrink_0()
-            .rounded(px(1.))
-            .bg(if lit { t.accent } else { t.accent.opacity(0.) });
+        let lit = self.window_active && (self.caret_lit || self.typed_at.elapsed() < ui::CARET_BLINK);
+        let caret = ui::caret(lit, t);
         let text = if searching {
             div()
                 .flex()

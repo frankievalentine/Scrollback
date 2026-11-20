@@ -141,6 +141,10 @@ pub struct Popover {
     /// Sessions newer than the oldest one listed that have no summary yet,
     /// so are not listed.
     waiting: usize,
+    /// Whether the search caret is in the lit half of its blink.
+    caret_lit: bool,
+    /// When a key was last pressed, so the caret stays lit while typing.
+    typed_at: Instant,
     scroll: ScrollHandle,
     detail_scroll: ScrollHandle,
     measured: ui::Measured,
@@ -168,12 +172,27 @@ impl Popover {
             searcher: Searcher::new(),
             copied: None,
             waiting: 0,
+            caret_lit: true,
+            typed_at: Instant::now(),
             scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             measured: Default::default(),
             focus: cx.focus_handle(),
         };
         popover.recompute();
+
+        // Blink the search caret for as long as the popover is open.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(ui::CARET_BLINK).await;
+            let open = this.update(cx, |this, cx| {
+                this.caret_lit = !this.caret_lit;
+                cx.notify();
+            });
+            if open.is_err() {
+                break;
+            }
+        })
+        .detach();
 
         // The saved index may be a little behind: read the harnesses again in
         // the background and take in whatever is new.
@@ -346,6 +365,7 @@ impl Popover {
         if ui::control_key(event, &self.focus, window, cx) {
             return;
         }
+        self.typed_at = Instant::now();
         let keystroke = &event.keystroke;
         let mods = keystroke.modifiers;
         match keystroke.key.as_str() {
@@ -387,12 +407,12 @@ impl Popover {
     }
 
     fn search_row(&self, t: &Theme) -> Div {
-        let caret = div().w(px(2.)).h(px(18.)).flex_shrink_0().rounded(px(1.)).bg(t.accent);
+        let caret = ui::caret(self.caret_lit || self.typed_at.elapsed() < ui::CARET_BLINK, t);
         let text = if self.query.is_empty() {
             div().flex().items_center().gap(px(6.)).child(caret).child(
                 div()
                     .text_color(t.ink3)
-                    .child("What was I doing with…"),
+                    .child("Search sessions"),
             )
         } else {
             div()

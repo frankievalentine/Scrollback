@@ -9,6 +9,20 @@ use gpui::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Half a blink of a search caret.
+pub const CARET_BLINK: std::time::Duration = std::time::Duration::from_millis(530);
+
+/// The caret in a search box. It shows that typing lands there: lit and
+/// dark in turn, and steady while keys are arriving.
+pub fn caret(lit: bool, t: &Theme) -> Div {
+    div()
+        .w(px(2.))
+        .h(px(18.))
+        .flex_shrink_0()
+        .rounded(px(1.))
+        .bg(if lit { t.accent } else { t.accent.opacity(0.) })
+}
+
 /// Whether the keyboard is being used to move between controls. The focus
 /// ring is drawn only then, so clicking a button does not leave a ring on it.
 static KEYBOARD: AtomicBool = AtomicBool::new(false);
