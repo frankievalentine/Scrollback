@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "\
-scrollback: every coding-agent session on this machine, in one place
+Scrollback: every coding-agent session on this machine, in one place
 
 Usage:
   scrollback index                 Update the index from every harness found

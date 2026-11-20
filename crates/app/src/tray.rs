@@ -114,9 +114,9 @@ fn pixels() -> Vec<u8> {
 fn build() -> Option<Tray> {
     let icon = Icon::from_rgba(pixels(), SIDE, SIDE).ok()?;
     let recent = cfg!(target_os = "linux").then(|| MenuItem::new("Recent sessions", true, None));
-    let open = MenuItem::new("Open scrollback", true, None);
+    let open = MenuItem::new("Open Scrollback", true, None);
     let settings = MenuItem::new("Settings…", true, None);
-    let quit = MenuItem::new("Quit scrollback", true, None);
+    let quit = MenuItem::new("Quit Scrollback", true, None);
     let menu = Menu::new();
     if let Some(recent) = &recent {
         menu.append(recent).ok()?;
@@ -134,7 +134,7 @@ fn build() -> Option<Tray> {
     #[cfg(not(target_os = "macos"))]
     let builder = builder.with_icon(icon);
     let built = builder
-        .with_tooltip("scrollback")
+        .with_tooltip("Scrollback")
         .with_menu(Box::new(menu))
         // A plain click opens the popover; the menu is for the right button.
         .with_menu_on_left_click(false)

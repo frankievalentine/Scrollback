@@ -1,5 +1,5 @@
 #!/bin/sh
-# Packages scrollback for Linux, on Linux: a tarball anyone can unpack into
+# Packages Scrollback for Linux, on Linux: a tarball anyone can unpack into
 # their home folder, and a .deb where dpkg is there to build one.
 #
 #   scripts/package-linux.sh
@@ -74,7 +74,7 @@ Installed-Size: $size
 Depends: $needs
 Recommends: libwayland-client0, mesa-vulkan-drivers
 Description: Every coding-agent session on this computer in one place
- scrollback gathers the sessions of Claude Code, Codex, OpenCode, pi and
+ Scrollback gathers the sessions of Claude Code, Codex, OpenCode, pi and
  Cursor into one window, each with a summary written beside it. It reads
  what those tools already keep and never writes to it.
 CONTROL

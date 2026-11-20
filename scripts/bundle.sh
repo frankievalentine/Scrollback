@@ -1,8 +1,8 @@
 #!/bin/bash
-# Builds scrollback.app: the release binary, its icon and an Info.plist,
+# Builds Scrollback.app: the release binary, its icon and an Info.plist,
 # wrapped as a Mac application and signed for running on this machine.
 #
-#   scripts/bundle.sh             build target/release/bundle/scrollback.app
+#   scripts/bundle.sh             build target/release/bundle/Scrollback.app
 #   scripts/bundle.sh --install   also copy it into /Applications
 #
 # SCROLLBACK_BUNDLE_ID sets the bundle identifier; the default is a
@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 
 bundle_id="${SCROLLBACK_BUNDLE_ID:-local.scrollback}"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-app="target/release/bundle/scrollback.app"
+app="target/release/bundle/Scrollback.app"
 icon_source="crates/app/icon/AppIcon.svg"
 icon="crates/app/icon/AppIcon.icns"
 
@@ -36,9 +36,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>scrollback</string>
+    <string>Scrollback</string>
     <key>CFBundleDisplayName</key>
-    <string>scrollback</string>
+    <string>Scrollback</string>
     <key>CFBundleIdentifier</key>
     <string>${bundle_id}</string>
     <key>CFBundleExecutable</key>
@@ -73,7 +73,9 @@ codesign --force --sign - "$app"
 echo "Built $app (version $version)"
 
 if [ "${1:-}" = "--install" ]; then
-    rm -rf "/Applications/scrollback.app"
-    cp -R "$app" "/Applications/scrollback.app"
-    echo "Installed /Applications/scrollback.app"
+    # The app was once named in lower case; on a disk that tells the two
+    # apart, that copy would otherwise be left beside the new one.
+    rm -rf "/Applications/scrollback.app" "/Applications/Scrollback.app"
+    cp -R "$app" "/Applications/Scrollback.app"
+    echo "Installed /Applications/Scrollback.app"
 fi

@@ -1,4 +1,4 @@
-// Added for scrollback: this copy is built as part of the workspace, where
+// Added for Scrollback: this copy is built as part of the workspace, where
 // its warnings about older Rust idioms would drown out the project's own.
 #![allow(warnings)]
 

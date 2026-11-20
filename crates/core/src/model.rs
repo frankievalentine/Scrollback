@@ -46,7 +46,7 @@ pub struct Summary {
     pub blocks_seen: usize,
 }
 
-/// A coding-agent harness whose session history scrollback can read.
+/// A coding-agent harness whose session history Scrollback can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Harness {
     ClaudeCode,

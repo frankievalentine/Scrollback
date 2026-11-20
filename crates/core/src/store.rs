@@ -104,7 +104,7 @@ on conflict (key) do update set
 ";
 
 impl Store {
-    /// Open the index in scrollback's data folder, creating it if needed.
+    /// Open the index in Scrollback's data folder, creating it if needed.
     pub fn open() -> Result<Store> {
         let dir = crate::data_dir();
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;

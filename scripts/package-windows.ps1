@@ -1,4 +1,4 @@
-# Packages scrollback for Windows, on Windows: a zip that runs from any
+# Packages Scrollback for Windows, on Windows: a zip that runs from any
 # folder, and an installer where Inno Setup is there to build one.
 #
 #   pwsh scripts/package-windows.ps1

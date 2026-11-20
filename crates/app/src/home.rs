@@ -825,7 +825,7 @@ impl Home {
                 div()
                     .px(px(10.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("scrollback"),
+                    .child("Scrollback"),
             )
             .child(views)
             // The lists scroll on their own, so the settings and status
@@ -1584,7 +1584,7 @@ impl Render for Home {
         );
         if self.first_run {
             // The menus act on sessions, and there are none to act on yet.
-            let bar = chrome::bar("scrollback", false, None, window, cx, &t);
+            let bar = chrome::bar("Scrollback", false, None, window, cx, &t);
             let root = Self::commands(div(), cx)
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::on_key))
@@ -1654,7 +1654,7 @@ impl Render for Home {
             .into_any_element()
         };
 
-        let bar = chrome::bar("scrollback", true, self.menu_open, window, cx, &t);
+        let bar = chrome::bar("Scrollback", true, self.menu_open, window, cx, &t);
         let body = div()
             .flex_1()
             .min_h(px(0.))

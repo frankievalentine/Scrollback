@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copies scrollback into place from an unpacked tarball.
+# Copies Scrollback into place from an unpacked tarball.
 #
 #   ./install.sh              into ~/.local, for this user
 #   PREFIX=/usr/local sudo ./install.sh     for everyone
@@ -17,7 +17,7 @@ if [ "${1:-}" = "--remove" ]; then
     for file in $files; do
         rm -f "$prefix/$file"
     done
-    echo "Removed scrollback from $prefix. Its index, in ~/.local/share/scrollback, is left alone."
+    echo "Removed Scrollback from $prefix. Its index, in ~/.local/share/scrollback, is left alone."
 else
     for file in $files; do
         mkdir -p "$(dirname "$prefix/$file")"
@@ -26,7 +26,7 @@ else
     # The launcher names the program by its full path, so it works whether
     # or not this prefix is on the PATH.
     sed -i "s|^Exec=.*|Exec=$prefix/bin/scrollback-app|" "$prefix/share/applications/scrollback.desktop"
-    echo "Installed scrollback into $prefix."
+    echo "Installed Scrollback into $prefix."
     case ":$PATH:" in
         *":$prefix/bin:"*) ;;
         *) echo "$prefix/bin is not on your PATH; add it to use the scrollback command in a terminal." ;;

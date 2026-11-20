@@ -16,13 +16,13 @@
 #endif
 
 [Setup]
-; This identifies scrollback to Windows across versions. Never change it.
+; This identifies Scrollback to Windows across versions. Never change it.
 AppId={{6F0C6D0B-8A0E-4B55-9C55-3E5C2F3B7A41}
-AppName=scrollback
+AppName=Scrollback
 AppVersion={#AppVersion}
-AppVerName=scrollback {#AppVersion}
-DefaultDirName={localappdata}\Programs\scrollback
-DefaultGroupName=scrollback
+AppVerName=Scrollback {#AppVersion}
+DefaultDirName={localappdata}\Programs\Scrollback
+DefaultGroupName=Scrollback
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
@@ -47,8 +47,8 @@ Source: "{#SourceDir}\scrollback-app.exe"; DestDir: "{app}"; Flags: ignoreversio
 Source: "{#SourceDir}\scrollback.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\scrollback"; Filename: "{app}\scrollback-app.exe"
-Name: "{autodesktop}\scrollback"; Filename: "{app}\scrollback-app.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Scrollback"; Filename: "{app}\scrollback-app.exe"
+Name: "{autodesktop}\Scrollback"; Filename: "{app}\scrollback-app.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\scrollback-app.exe"; Description: "Open scrollback"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\scrollback-app.exe"; Description: "Open Scrollback"; Flags: nowait postinstall skipifsilent

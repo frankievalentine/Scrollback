@@ -31,7 +31,7 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           mkdir -p target/package
-          ditto -c -k --keepParent target/release/bundle/scrollback.app \
+          ditto -c -k --keepParent target/release/bundle/Scrollback.app \
             "target/package/scrollback-$version-macos-$(uname -m).zip"
       - uses: actions/upload-artifact@v4
         with:

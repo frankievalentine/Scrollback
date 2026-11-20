@@ -216,10 +216,10 @@ impl SettingsView {
             .child(row(
                 if mac { "Menu bar icon" } else { "Tray icon" },
                 if mac {
-                    "Keep scrollback in the menu bar. It stays running there when its window \
+                    "Keep Scrollback in the menu bar. It stays running there when its window \
                      is closed, and a click opens recent sessions."
                 } else {
-                    "Keep scrollback in the system tray. It stays running there when its \
+                    "Keep Scrollback in the system tray. It stays running there when its \
                      window is closed, and a click opens recent sessions."
                 },
                 switch("menu-bar-icon", in_menu_bar, t).on_click(
@@ -414,7 +414,7 @@ impl SettingsView {
                                 div()
                                     .text_size(px(text::HEADLINE))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("scrollback"),
+                                    .child("Scrollback"),
                             )
                             .child(
                                 div()
@@ -454,7 +454,7 @@ impl SettingsView {
                         div()
                             .text_size(px(text::SMALL))
                             .text_color(t.ink2)
-                            .child("scrollback reads session files where they are and never writes to them."),
+                            .child("Scrollback reads session files where they are and never writes to them."),
                     ),
             )
     }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Shows, from a Mac, what scrollback looks like on Linux: builds it in a
+# Shows, from a Mac, what Scrollback looks like on Linux: builds it in a
 # container, runs it on a desktop with no screen (sway, under Wayland) and
 # saves a picture of that desktop. Needs Docker; the first run takes several
 # minutes.

@@ -85,19 +85,19 @@ fn menus() -> Vec<Menu> {
     let mut menus = Vec::new();
     if mac {
         menus.push(Menu {
-            name: "scrollback".into(),
+            name: "Scrollback".into(),
             items: vec![
-                MenuItem::action("About scrollback", About),
+                MenuItem::action("About Scrollback", About),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
-                MenuItem::action("Hide scrollback", Hide),
+                MenuItem::action("Hide Scrollback", Hide),
                 MenuItem::action("Hide Others", HideOthers),
                 MenuItem::action("Show All", ShowAll),
                 MenuItem::separator(),
-                MenuItem::action("Quit scrollback", Quit),
+                MenuItem::action("Quit Scrollback", Quit),
             ],
         });
     }
@@ -133,7 +133,7 @@ fn menus() -> Vec<Menu> {
     } else {
         Menu {
             name: "Help".into(),
-            items: vec![MenuItem::action("About scrollback", About)],
+            items: vec![MenuItem::action("About Scrollback", About)],
         }
     });
     menus

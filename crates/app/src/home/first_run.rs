@@ -165,7 +165,7 @@ impl Home {
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.9))
                     .on_click(cx.listener(|this, _, _, cx| this.finish_first_run(cx)))
-                    .child("Open scrollback"),
+                    .child("Open Scrollback"),
             )
             .child(
                 div()
@@ -198,7 +198,7 @@ impl Home {
                             .line_height(px(22.))
                             .text_color(t.ink2)
                             .child(
-                                "scrollback reads the session files where they already are \
+                                "Scrollback reads the session files where they already are \
                                  and keeps its index on this computer. It never writes to them.",
                             ),
                     ),
@@ -221,7 +221,7 @@ impl Home {
                     .items_center()
                     .gap(px(9.))
                     .child(svg().path("mark.svg").size(px(18.)).flex_shrink_0().text_color(t.accent))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("scrollback")),
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Scrollback")),
             )
             .child(
                 div().relative().flex_1().min_h(px(0.)).child(

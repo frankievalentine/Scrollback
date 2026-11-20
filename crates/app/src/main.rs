@@ -104,7 +104,7 @@ fn open_main_with(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(760.), px(480.))),
-                titlebar: Some(ui::titlebar("scrollback")),
+                titlebar: Some(ui::titlebar("Scrollback")),
                 app_id: Some(ui::APP_ID.into()),
                 window_decorations: chrome::decorations(),
                 ..Default::default()

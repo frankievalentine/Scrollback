@@ -52,7 +52,7 @@ pub fn xdg_data() -> PathBuf {
     env_dir("XDG_DATA_HOME").unwrap_or_else(|| home().join(".local").join("share"))
 }
 
-/// Where scrollback keeps its own index and settings. `SCROLLBACK_DATA_DIR`
+/// Where Scrollback keeps its own index and settings. `SCROLLBACK_DATA_DIR`
 /// points it somewhere else, so a change can be tried against a copy.
 pub fn data_dir() -> PathBuf {
     if let Some(dir) = env_dir("SCROLLBACK_DATA_DIR") {

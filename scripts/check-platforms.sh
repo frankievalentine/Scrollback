@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks, from a Mac, that scrollback still builds for Linux and Windows:
+# Checks, from a Mac, that Scrollback still builds for Linux and Windows:
 # runs the tests on Linux and builds every crate for Windows, inside a
 # Rust container. Needs Docker. The first run takes several minutes; later
 # ones reuse what is kept in the three "scrollback-linux-*" Docker volumes.

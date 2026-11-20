@@ -34,8 +34,8 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "ProductName", "scrollback"
-            VALUE "FileDescription", "scrollback"
+            VALUE "ProductName", "Scrollback"
+            VALUE "FileDescription", "Scrollback"
             VALUE "OriginalFilename", "scrollback-app.exe"
             VALUE "FileVersion", "{version}"
             VALUE "ProductVersion", "{version}"

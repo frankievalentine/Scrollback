@@ -337,7 +337,7 @@ fn without_console(command: &mut Command) -> &mut Command {
 
 fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Value, f64)> {
     let binary = claude_binary().ok_or_else(|| anyhow!("the `claude` command was not found"))?;
-    // Run from scrollback's own folder so no project's CLAUDE.md is picked up,
+    // Run from Scrollback's own folder so no project's CLAUDE.md is picked up,
     // and without session persistence so summaries never appear as sessions.
     // The folder name is deliberately not a plausible project name, because
     // the CLI tells the model its working directory.

@@ -1,4 +1,4 @@
-# Builds and tests scrollback on the three systems it is meant to run on.
+# Builds and tests Scrollback on the three systems it is meant to run on.
 name: CI
 
 on:
