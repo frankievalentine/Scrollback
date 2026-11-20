@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=scrollback
+GenericName=Coding-agent session history
+Comment=Every coding-agent session on this computer in one place, each with a summary
+Exec=scrollback-app
+Icon=scrollback
+Terminal=false
+Categories=Development;
+Keywords=claude;codex;opencode;cursor;agent;session;history;summary;
+StartupNotify=true
+# Matches the name the app gives its windows, so the desktop can tie a
+# running window to this launcher and its icon.
+StartupWMClass=scrollback

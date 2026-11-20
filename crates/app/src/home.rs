@@ -6,6 +6,7 @@ mod first_run;
 mod reader;
 
 use crate::app_menu::{CopyResume, ReadTranscript, Reindex, ShowActivity, ShowSessions, WriteSummary};
+use crate::chrome;
 use crate::settings::{self, Settings, Tab};
 use crate::theme::{text, claude_orange, Theme, mono, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
@@ -108,6 +109,10 @@ pub struct Home {
     activity_scroll: gpui::ScrollHandle,
     first_run_scroll: gpui::ScrollHandle,
     measured: ui::Measured,
+    /// Which menu is open, where the menus are drawn in the window.
+    menu_open: Option<usize>,
+    /// Whether the window is too narrow for the search box's key hints.
+    narrow: bool,
     /// Whether the search caret is in the lit half of its blink.
     caret_lit: bool,
     /// When a key last changed the search, so the caret stays lit while typing.
@@ -183,6 +188,8 @@ impl Home {
             activity_scroll: gpui::ScrollHandle::new(),
             first_run_scroll: gpui::ScrollHandle::new(),
             measured: Default::default(),
+            menu_open: chrome::open_at_launch(),
+            narrow: false,
             caret_lit: true,
             typed_at: Instant::now(),
             window_active: true,
@@ -613,6 +620,10 @@ impl Home {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" && chrome::close(self, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if ui::control_key(event, &self.focus, window, cx) {
             return;
         }
@@ -953,7 +964,12 @@ impl Home {
                 .child(format!("in {words}"))
                 .child(div().text_color(t.ink3).child("×"))
         });
-        let hint = if searching {
+        // In a narrow window the hints give way to what is being typed.
+        let hint = if searching && self.narrow {
+            format!("{} sessions · {} messages", self.hits.len(), self.message_hits.len())
+        } else if self.narrow {
+            String::new()
+        } else if searching {
             format!(
                 "{} sessions · {} messages · {:.1?}   {} expand",
                 self.hits.len(),
@@ -1559,6 +1575,7 @@ impl Home {
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::for_appearance(window.appearance());
+        self.narrow = window.viewport_size().width < px(1040.);
         ui::settle(
             &[&self.sidebar_scroll, &self.activity_scroll, &self.first_run_scroll],
             &self.measured,
@@ -1566,7 +1583,9 @@ impl Render for Home {
             cx,
         );
         if self.first_run {
-            return Self::commands(div(), cx)
+            // The menus act on sessions, and there are none to act on yet.
+            let bar = chrome::bar("scrollback", false, None, window, cx, &t);
+            let root = Self::commands(div(), cx)
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::on_key))
                 .on_mouse_down(
@@ -1574,12 +1593,16 @@ impl Render for Home {
                     cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
                 )
                 .size_full()
+                .flex()
+                .flex_col()
                 .bg(t.bg)
                 .text_color(t.ink)
                 .font_family(UI_FONT)
                 .text_size(px(text::BODY))
                 .line_height(px(20.))
-                .child(self.first_run_view(&t, cx));
+                .children(bar)
+                .child(div().flex_1().min_h(px(0.)).child(self.first_run_view(&t, cx)));
+            return chrome::frame(root, window, &t);
         }
         let feed: AnyElement = if self.rows.is_empty() {
             let filtered = self.filter_words();
@@ -1631,20 +1654,11 @@ impl Render for Home {
             .into_any_element()
         };
 
-        Self::commands(div(), cx)
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::on_key))
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
-            )
-            .size_full()
+        let bar = chrome::bar("scrollback", true, self.menu_open, window, cx, &t);
+        let body = div()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
-            .bg(t.bg)
-            .text_color(t.ink)
-            .font_family(UI_FONT)
-            .text_size(px(text::BODY))
-            .line_height(px(20.))
             .child(self.sidebar(&t, cx))
             .child(
                 div()
@@ -1662,7 +1676,31 @@ impl Render for Home {
                         el.child(self.search_bar(&t, cx))
                             .child(div().flex_1().min_h(px(0.)).child(feed))
                     }),
+            );
+        let root = Self::commands(div(), cx)
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| ui::pointer_used(&this.focus, window)),
             )
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(t.bg)
+            .text_color(t.ink)
+            .font_family(UI_FONT)
+            .text_size(px(text::BODY))
+            .line_height(px(20.))
+            .children(bar)
+            .child(body);
+        chrome::frame(root, window, &t)
+    }
+}
+
+impl chrome::Menus for Home {
+    fn open_menu(&mut self) -> &mut Option<usize> {
+        &mut self.menu_open
     }
 }
 

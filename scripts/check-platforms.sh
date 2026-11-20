@@ -1,12 +1,13 @@
 #!/bin/sh
 # Checks, from a Mac, that scrollback still builds for Linux and Windows:
-# runs the tests on Linux and type-checks every crate for Windows, inside a
+# runs the tests on Linux and builds every crate for Windows, inside a
 # Rust container. Needs Docker. The first run takes several minutes; later
 # ones reuse what is kept in the three "scrollback-linux-*" Docker volumes.
 #
-# This is a stand-in for CI while working locally. The Windows half only
-# checks types: it does not link, and does not compile GPUI's shaders, which
-# only a real Windows build does.
+# This is a stand-in for CI while working locally. The Windows half builds
+# and links the programs with the GNU toolchain, icon and all, but cannot
+# run them, and does not compile GPUI's shaders the way a release build on
+# Windows does.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -26,8 +27,8 @@ docker run --rm \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 >/dev/null 2>&1
         echo "== Linux: build and test"
         cargo test --workspace --locked
-        echo "== Windows: type-check"
+        echo "== Windows: build"
         rustup target add x86_64-pc-windows-gnu >/dev/null 2>&1
-        cargo check --workspace --locked --target x86_64-pc-windows-gnu
+        cargo build --workspace --locked --target x86_64-pc-windows-gnu
     '
-echo "Linux tests pass and Windows type-checks."
+echo "Linux tests pass and the Windows build links."

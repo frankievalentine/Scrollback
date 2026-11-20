@@ -2,6 +2,7 @@
 //! sees them. Every change is saved straight away and announced, so the
 //! session window follows without being told directly.
 
+use crate::chrome;
 use crate::home::{label, logo, nav_row};
 use crate::theme::{text, self, Theme, mono, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
@@ -80,6 +81,8 @@ pub fn open(cx: &mut App, tab: Tab) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(600.), px(420.))),
             titlebar: Some(ui::titlebar("Settings")),
+            app_id: Some(ui::APP_ID.into()),
+            window_decorations: chrome::decorations(),
             ..Default::default()
         },
         |window, cx| {
@@ -103,6 +106,8 @@ pub struct SettingsView {
     scroll: gpui::ScrollHandle,
     measured: ui::Measured,
     focus: FocusHandle,
+    /// Never set: this window has no menus, only the bar they would sit in.
+    menu_open: Option<usize>,
 }
 
 impl SettingsView {
@@ -120,6 +125,7 @@ impl SettingsView {
             scroll: gpui::ScrollHandle::new(),
             measured: Default::default(),
             focus: cx.focus_handle(),
+            menu_open: None,
         }
     }
 
@@ -200,8 +206,8 @@ impl SettingsView {
             .child(row(
                 "Summarise sessions in use",
                 "Also summarise a session a couple of minutes in, and again every ten \
-                 minutes it moves on, so it is in the menu bar list while you work. Uses \
-                 more requests.",
+                 minutes it moves on, so it is among the recent sessions while you work. \
+                 Uses more requests.",
                 switch("live", live, t)
                     .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.live_summaries = !live))),
                 t,
@@ -487,7 +493,8 @@ impl Render for SettingsView {
             Tab::Summaries => self.summaries(&t, cx),
             Tab::About => self.about(&t),
         };
-        div()
+        let bar = chrome::bar("Settings", false, None, window, cx, &t);
+        let root = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, window, cx| {
                 ui::control_key(event, &this.focus, window, cx);
@@ -498,11 +505,17 @@ impl Render for SettingsView {
             )
             .size_full()
             .flex()
+            .flex_col()
             .bg(t.bg)
             .text_color(t.ink)
             .font_family(UI_FONT)
             .text_size(px(text::BODY))
             .line_height(px(20.))
+            .children(bar);
+        let body = div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
             .child(tabs)
             .child(
                 div().relative().flex_1().min_w(px(0.)).h_full().child(
@@ -523,7 +536,14 @@ impl Render for SettingsView {
                     )
                     .child(content))
                     .children(ui::scrollbar(&self.scroll, &t)),
-            )
+            );
+        chrome::frame(root.child(body), window, &t)
+    }
+}
+
+impl chrome::Menus for SettingsView {
+    fn open_menu(&mut self) -> &mut Option<usize> {
+        &mut self.menu_open
     }
 }
 

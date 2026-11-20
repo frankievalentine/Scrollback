@@ -4,6 +4,7 @@
 
 mod app_menu;
 mod background;
+mod chrome;
 mod home;
 mod markdown;
 mod popover;
@@ -104,6 +105,8 @@ fn open_main_with(
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(760.), px(480.))),
                 titlebar: Some(ui::titlebar("scrollback")),
+                app_id: Some(ui::APP_ID.into()),
+                window_decorations: chrome::decorations(),
                 ..Default::default()
             },
             |window, cx| {

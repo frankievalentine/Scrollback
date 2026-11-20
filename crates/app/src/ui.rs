@@ -41,6 +41,10 @@ pub fn titlebar(title: &'static str) -> gpui::TitlebarOptions {
     }
 }
 
+/// The name the app goes by to a Linux desktop, which matches a window to
+/// its launcher and icon by it. The desktop file carries the same name.
+pub const APP_ID: &str = "scrollback";
+
 /// Room left above a window's content: on a Mac, enough to clear the
 /// window's buttons.
 pub const TOP_INSET: f32 = if cfg!(target_os = "macos") { 52. } else { 20. };

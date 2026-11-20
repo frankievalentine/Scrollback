@@ -1,0 +1,98 @@
+# Builds the packages for a release when a version tag is pushed, and
+# attaches them to a draft GitHub release for a person to look over and
+# publish.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag should match the version in Cargo.toml, which names the files.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the app
+        run: scripts/bundle.sh
+      # The app is signed for the machine that built it only. Until it is
+      # signed with a Developer ID and notarised, macOS will warn before
+      # opening it on another Mac.
+      - name: Zip the app
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          mkdir -p target/package
+          ditto -c -k --keepParent target/release/bundle/scrollback.app \
+            "target/package/scrollback-$version-macos-$(uname -m).zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: target/package/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake clang \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev \
+            libssl-dev libzstd-dev libvulkan-dev libasound2-dev
+      - name: Build the tarball and the .deb
+        run: scripts/package-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/package/*.tar.gz
+            target/package/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the zip and the installer
+        shell: pwsh
+        run: scripts/package-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/package/*
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Create a draft release with the packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" packages/* \
+            --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" --generate-notes

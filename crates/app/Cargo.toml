@@ -8,6 +8,11 @@ license.workspace = true
 name = "scrollback-app"
 path = "src/main.rs"
 
+[build-dependencies]
+# Compiles the Windows icon and file details into the program; it does
+# nothing for other systems.
+embed-resource = "3"
+
 [dependencies]
 scrollback-core = { path = "../core" }
 anyhow.workspace = true
