@@ -48,7 +48,7 @@ struct Stamp {
 
 /// Bump this when a parser changes what it extracts, so existing indexes
 /// re-read every source file on the next refresh.
-const PARSER_VERSION: i64 = 6;
+const PARSER_VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 create table if not exists sessions (
@@ -90,8 +90,8 @@ create table if not exists digests (
 const UPSERT: &str = "
 insert into sessions (key, harness, id, title, first_prompt, cwd, branch, model,
     started_ms, updated_ms, user_turns, assistant_turns, tool_calls,
-    tokens_in, tokens_out, cost_usd, source, parent, active_ms, tokens_cached, origin)
-values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+    tokens_in, tokens_out, cost_usd, source, parent, active_ms, tokens_cached, origin, active_days)
+values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
 on conflict (key) do update set
     title = excluded.title, first_prompt = excluded.first_prompt, cwd = excluded.cwd,
     branch = excluded.branch, model = excluded.model, started_ms = excluded.started_ms,
@@ -100,7 +100,7 @@ on conflict (key) do update set
     tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
     cost_usd = excluded.cost_usd, source = excluded.source, parent = excluded.parent,
     active_ms = excluded.active_ms, tokens_cached = excluded.tokens_cached,
-    origin = excluded.origin
+    origin = excluded.origin, active_days = excluded.active_days
 ";
 
 impl Store {
@@ -146,6 +146,12 @@ impl Store {
                 [],
             )?;
         }
+        let has_days = db
+            .prepare("select 1 from pragma_table_info('sessions') where name = 'active_days'")?
+            .exists([])?;
+        if !has_days {
+            db.execute("alter table sessions add column active_days text", [])?;
+        }
         let has_cached = db
             .prepare("select 1 from pragma_table_info('sessions') where name = 'tokens_cached'")?
             .exists([])?;
@@ -182,7 +188,7 @@ impl Store {
             "select harness, id, title, first_prompt, cwd, branch, model, started_ms,
                     updated_ms, user_turns, assistant_turns, tool_calls, tokens_in,
                     tokens_out, cost_usd, source, parent, summary, summary_for_ms, active_ms,
-                    tokens_cached, origin, via, via_title
+                    tokens_cached, origin, via, via_title, active_days
              from sessions {filter} order by updated_ms desc"
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -225,6 +231,10 @@ impl Store {
                 source: row.get(15)?,
                 parent: row.get(16)?,
                 active_ms: row.get(19)?,
+                active_days: row
+                    .get::<_, Option<String>>(24)?
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_default(),
                 summary_stale: summary.is_some() && summary_for_ms.unwrap_or(0) < updated_ms,
                 summary_for_ms: summary.as_ref().and(summary_for_ms),
                 summary,
@@ -750,5 +760,6 @@ fn row_params(s: &Session) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(s.active_ms),
         Box::new(s.tokens_cached as i64),
         Box::new(s.origin.slug()),
+        Box::new(serde_json::to_string(&s.active_days).unwrap_or_default()),
     ]
 }

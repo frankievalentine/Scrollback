@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A pause longer than this between two events is treated as time away.
 pub const IDLE_GAP_MS: i64 = 5 * 60 * 1000;
@@ -195,6 +196,10 @@ pub struct Session {
     /// Time the session was actually in use: the sum of gaps between
     /// consecutive events, ignoring gaps longer than `IDLE_GAP_MS`.
     pub active_ms: i64,
+    /// The same time split by the local day it was spent on, keyed by date
+    /// (`2026-11-20`), so a session that ran over several days counts on
+    /// each of them.
+    pub active_days: BTreeMap<String, i64>,
     pub user_turns: u32,
     pub assistant_turns: u32,
     pub tool_calls: u32,
@@ -233,6 +238,7 @@ impl Session {
             started_ms: 0,
             updated_ms: 0,
             active_ms: 0,
+            active_days: BTreeMap::new(),
             user_turns: 0,
             assistant_turns: 0,
             tool_calls: 0,
@@ -289,11 +295,35 @@ impl Session {
         self.active_ms
     }
 
+    /// Count `gap` of time in use, ending at `ts`, towards the session and
+    /// towards the day it ended on.
+    pub(crate) fn add_active(&mut self, ts: i64, gap: i64) {
+        self.active_ms += gap;
+        *self.active_days.entry(day_key(ts)).or_insert(0) += gap;
+    }
+
+    /// Time in use on each local day, oldest first. Sessions indexed before
+    /// time was kept by day count all of it on the day they were last used.
+    pub fn active_by_day(&self) -> Vec<(chrono::NaiveDate, i64)> {
+        if self.active_days.is_empty() {
+            return local_date(self.updated_ms)
+                .filter(|_| self.active_ms > 0)
+                .map(|date| vec![(date, self.active_ms)])
+                .unwrap_or_default();
+        }
+        self.active_days
+            .iter()
+            .filter_map(|(day, ms)| {
+                chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok().map(|date| (date, *ms))
+            })
+            .collect()
+    }
+
     /// Widen the session's time range to include `ts`.
     pub(crate) fn touch(&mut self, ts: i64) {
         let gap = ts - self.updated_ms;
         if self.updated_ms != 0 && gap > 0 && gap <= IDLE_GAP_MS {
-            self.active_ms += gap;
+            self.add_active(ts, gap);
         }
         if self.started_ms == 0 || ts < self.started_ms {
             self.started_ms = ts;
@@ -302,6 +332,17 @@ impl Session {
             self.updated_ms = ts;
         }
     }
+}
+
+/// The local date of a moment, as Unix milliseconds.
+fn local_date(ms: i64) -> Option<chrono::NaiveDate> {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_millis_opt(ms).single().map(|t| t.date_naive())
+}
+
+/// The key a moment's day is kept under in `active_days`.
+pub(crate) fn day_key(ms: i64) -> String {
+    local_date(ms).map(|date| date.format("%Y-%m-%d").to_string()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -319,6 +360,25 @@ mod tests {
         assert_eq!(s.project(), "runyard");
         s.cwd = String::new();
         assert_eq!(s.project(), "");
+    }
+
+    #[test]
+    fn time_in_use_is_kept_on_the_day_it_was_spent() {
+        use chrono::TimeZone;
+        let at = |day: u32, hour: u32, minute: u32| {
+            chrono::Local.with_ymd_and_hms(2026, 11, day, hour, minute, 0).unwrap().timestamp_millis()
+        };
+        let mut s = Session::new(Harness::ClaudeCode, "s", "test");
+        // Two minutes late on the 18th, then three minutes on the 20th.
+        s.touch(at(18, 23, 50));
+        s.touch(at(18, 23, 52));
+        s.touch(at(20, 9, 0));
+        s.touch(at(20, 9, 3));
+        assert_eq!(s.active_ms, 5 * 60_000);
+        let days = s.active_by_day();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].1, 2 * 60_000);
+        assert_eq!(days[1].1, 3 * 60_000);
     }
 
     #[test]

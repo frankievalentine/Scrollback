@@ -132,14 +132,36 @@ impl Activity {
             .collect();
 
         let mut activity = Activity { days, ..Default::default() };
-        let within = recent(sessions, days, now);
+        let sessions: Vec<&Session> = sessions.into_iter().collect();
+        // Time in use counts on the days it was spent, so a session last used
+        // today that began last week adds only today's part, and one last
+        // used before the period can still add time spent within it.
+        let in_period = |session: &Session| -> i64 {
+            session
+                .active_by_day()
+                .into_iter()
+                .filter(|(date, _)| *date >= first && *date <= today)
+                .map(|(_, ms)| ms)
+                .sum()
+        };
+        for session in &sessions {
+            let spent = in_period(session);
+            if spent == 0 {
+                continue;
+            }
+            activity.active_ms += spent;
+            match activity.by_origin.iter_mut().find(|share| share.origin == session.origin) {
+                Some(share) => share.active_ms += spent,
+                None => activity.by_origin.push(Share { origin: session.origin, sessions: 0, active_ms: spent }),
+            }
+        }
+        let within = recent(sessions.iter().copied(), days, now);
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let mut seen_files: HashSet<(String, String)> = HashSet::new();
         for session in within {
             let Some(day) = local_day(session.updated_ms) else { continue };
             activity.sessions += 1;
-            activity.active_ms += session.active_ms;
             activity.tokens += session.tokens();
             activity.tokens_cached += session.tokens_cached;
             if let Some(cost) = session.cost_usd {
@@ -152,14 +174,11 @@ impl Activity {
             buckets[bucket].sessions += 1;
 
             match activity.by_origin.iter_mut().find(|share| share.origin == session.origin) {
-                Some(share) => {
-                    share.sessions += 1;
-                    share.active_ms += session.active_ms;
-                }
+                Some(share) => share.sessions += 1,
                 None => activity.by_origin.push(Share {
                     origin: session.origin,
                     sessions: 1,
-                    active_ms: session.active_ms,
+                    active_ms: 0,
                 }),
             }
 
@@ -194,6 +213,9 @@ impl Activity {
                 }
             }
         }
+        // A source whose only time fell within the period, from a session
+        // last used before it, has no sessions to show and is left out.
+        activity.by_origin.retain(|share| share.sessions > 0);
         activity.by_origin.sort_by_key(|share| std::cmp::Reverse(share.sessions));
         activity.buckets = buckets;
         activity.fingerprint = hasher.finish();

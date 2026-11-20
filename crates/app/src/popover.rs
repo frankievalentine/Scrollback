@@ -1129,8 +1129,7 @@ struct Day {
     active_ms: i64,
 }
 
-/// The last seven days, oldest first and today last. A session counts
-/// towards the day it was last used, as in the window's activity view.
+/// The last seven days, oldest first and today last.
 fn week_days(sessions: &[Session]) -> Vec<Day> {
     use chrono::{Duration, Local, TimeZone};
     let today = Local::now().date_naive();
@@ -1139,12 +1138,17 @@ fn week_days(sessions: &[Session]) -> Vec<Day> {
         .map(|back| Day { date: today - Duration::days(back), ..Day::default() })
         .collect();
     for session in sessions {
-        let Some(date) = Local.timestamp_millis_opt(session.updated_ms).single().map(|t| t.date_naive()) else {
-            continue;
-        };
-        if let Some(day) = days.iter_mut().find(|day| day.date == date) {
-            day.sessions += 1;
-            day.active_ms += session.active_ms;
+        // A session counts once, on the day it was last used; its time
+        // counts on each day it was spent.
+        if let Some(date) = Local.timestamp_millis_opt(session.updated_ms).single().map(|t| t.date_naive()) {
+            if let Some(day) = days.iter_mut().find(|day| day.date == date) {
+                day.sessions += 1;
+            }
+        }
+        for (date, ms) in session.active_by_day() {
+            if let Some(day) = days.iter_mut().find(|day| day.date == date) {
+                day.active_ms += ms;
+            }
         }
     }
     days
