@@ -504,13 +504,23 @@ pub fn condense(session: &Session, events: &[Event], budget: usize) -> String {
         .single()
         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default();
+    // A session written to in the last few minutes is still being worked in.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let state = if now_ms - session.updated_ms < crate::model::IDLE_GAP_MS {
+        "in progress"
+    } else {
+        "finished"
+    };
     let mut text = format!(
-        "Harness: {}\nProject: {}\nBranch: {}\nStarted: {}, active for {} minutes\n\n",
+        "Harness: {}\nProject: {}\nBranch: {}\nStarted: {}, active for {} minutes\nState: {}\n\n",
         session.harness.name(),
         session.project(),
         session.branch.as_deref().unwrap_or("unknown"),
         started,
         session.duration_ms() / 60_000,
+        state,
     );
 
     let total: usize = blocks.iter().map(|b| b.len() + 2).sum();

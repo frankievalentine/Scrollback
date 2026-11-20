@@ -41,6 +41,9 @@ Write for the developer who ran the session and has since forgotten it. They wan
 to know what it was about, what state it was left in, and whether anything needs \
 picking up.
 
+- If the \"State:\" line says the session is in progress, it has not ended. \
+Describe where the work stands so far, never say it ended, stopped or was cut \
+off, and judge the outcome on what has been delivered up to now.
 - The project is the one on the transcript's \"Project:\" line. Ignore any \
 working directory or environment details given to you outside the transcript.
 - Be specific. Name the files, functions, commands, errors and decisions that \

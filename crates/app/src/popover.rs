@@ -10,8 +10,10 @@ use gpui::{
     FontWeight, Global, KeyDownEvent, Pixels, ScrollHandle, SharedString, Window, WindowBounds,
     WindowHandle, WindowKind, WindowOptions,
 };
+use crate::settings::Settings;
 use scrollback_core::search::Searcher;
-use scrollback_core::Session;
+use scrollback_core::{summarize, Session, Store, Summary};
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const WIDTH: f32 = 800.;
@@ -20,6 +22,9 @@ const HEIGHT: f32 = 500.;
 const SHOWN: usize = 40;
 /// A session written to this recently counts as in use.
 const ACTIVE_WITHIN_MS: i64 = 5 * 60 * 1000;
+/// How long a session must stay selected before a missing summary is
+/// written for it, so arrowing down the list does not start one per row.
+const SETTLE: Duration = Duration::from_millis(450);
 
 /// The popover, while it is open, and when it last closed itself.
 struct Open {
@@ -133,6 +138,12 @@ pub struct Popover {
     searcher: Searcher,
     /// Which button last copied something, to say so on it.
     copied: Option<&'static str>,
+    /// Keys of sessions whose summary is being written right now.
+    busy: HashSet<String>,
+    /// Why a summary could not be written, by session key.
+    failed: HashMap<String, String>,
+    /// Whether summaries may be written without being asked.
+    auto: bool,
     scroll: ScrollHandle,
     pub focus: FocusHandle,
 }
@@ -157,21 +168,98 @@ impl Popover {
             query: String::new(),
             searcher: Searcher::new(),
             copied: None,
+            busy: HashSet::new(),
+            failed: HashMap::new(),
+            auto: {
+                let config = &cx.global::<Settings>().0;
+                config.onboarded
+                    && config.auto_summarize
+                    && std::env::var_os("SCROLLBACK_NO_CLAUDE").is_none()
+                    && summarize::claude_binary().is_some()
+            },
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
         };
         popover.recompute();
+        popover.summarize_when_settled(cx);
         popover
+    }
+
+    /// The point of the popover is the summary, so a selected session that
+    /// has none gets one written, once the selection has rested on it. This
+    /// includes sessions still in use, which the window leaves until they
+    /// go quiet; their summary is refreshed then.
+    fn summarize_when_settled(&mut self, cx: &mut Context<Self>) {
+        if !self.auto {
+            return;
+        }
+        let Some(key) = self.current().filter(|s| s.summary.is_none()).map(Session::key) else {
+            return;
+        };
+        if self.busy.contains(&key) || self.failed.contains_key(&key) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SETTLE).await;
+            this.update(cx, |this, cx| {
+                if this.current().map(Session::key).as_deref() == Some(key.as_str()) {
+                    this.write_summary(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Write the selected session's summary now.
+    fn write_summary(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.current().cloned() else { return };
+        let key = session.key();
+        if !self.busy.insert(key.clone()) {
+            return;
+        }
+        self.failed.remove(&key);
+        cx.notify();
+        // The request runs to the end and is saved even if the popover has
+        // closed by then; the summary is there the next time it opens.
+        let work = cx.background_executor().spawn(async move {
+            let written = summarize::summarize(&session)?;
+            Store::open()?.set_summary(&session, &written.summary)?;
+            anyhow::Ok(written.summary)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| this.summary_arrived(key, result, cx)).ok();
+        })
+        .detach();
+    }
+
+    fn summary_arrived(&mut self, key: String, result: anyhow::Result<Summary>, cx: &mut Context<Self>) {
+        self.busy.remove(&key);
+        match result {
+            Ok(summary) => {
+                if let Some(session) = self.sessions.iter_mut().find(|s| s.key() == key) {
+                    session.summary = Some(summary);
+                    session.summary_stale = false;
+                }
+            }
+            Err(err) => {
+                self.failed.insert(key, format!("{err:#}"));
+            }
+        }
+        cx.notify();
     }
 
     /// What the popover holds, for the development key-press log.
     pub fn dev_state(&self) -> String {
         format!(
-            "popover query={:?} listed={} selected={} copied={:?} title={:?}",
+            "popover query={:?} listed={} selected={} copied={:?} busy={} summary={} title={:?}",
             self.query,
             self.listed.len(),
             self.selected,
             self.copied,
+            self.busy.len(),
+            self.current().is_some_and(|s| s.summary.is_some()),
             self.current().map(|s| s.display_title().chars().take(40).collect::<String>()),
         )
     }
@@ -238,6 +326,7 @@ impl Popover {
         if let Some(line) = line {
             self.scroll.scroll_to_item(line);
         }
+        self.summarize_when_settled(cx);
         cx.notify();
     }
 
@@ -319,6 +408,7 @@ impl Popover {
                 cx.notify();
             }
         }
+        self.summarize_when_settled(cx);
         cx.stop_propagation();
     }
 
@@ -486,51 +576,83 @@ impl Popover {
                     .line_clamp(3)
                     .child(session.display_title().to_string()),
             );
-        let mut open_ends = None;
+        let key = session.key();
+        let writing = self.busy.contains(&key);
+        let mut sections: Vec<Div> = Vec::new();
         match &session.summary {
             Some(summary) => {
                 top = top
                     .child(
                         div()
-                            .line_height(px(22.))
+                            .text_size(px(15.))
+                            .line_height(px(23.))
                             .text_color(t.ink2)
-                            .line_clamp(6)
                             .child(summary.summary.clone()),
                     )
-                    .child(div().flex().child(outcome_mark(summary, true, t)));
-                if !summary.open_ends.is_empty() {
-                    let mut ends = div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(5.))
-                        .pt(px(16.))
-                        .border_t_1()
-                        .border_color(t.line)
-                        .child(label("Left open", t));
-                    for end in summary.open_ends.iter().take(3) {
-                        ends = ends.child(
+                    .child(div().flex().items_center().gap(px(12.)).child(outcome_mark(summary, true, t)).children(
+                        session.summary_stale.then(|| {
                             div()
-                                .flex()
-                                .gap(px(8.))
-                                .child(div().w(px(10.)).flex_shrink_0().text_color(t.ink3).child("–"))
-                                .child(div().flex_1().min_w(px(0.)).line_clamp(2).child(end.clone())),
-                        );
-                    }
-                    open_ends = Some(ends);
+                                .text_size(px(12.))
+                                .text_color(t.ink3)
+                                .child(if writing { "Updating…" } else { "Written before the session moved on." })
+                        }),
+                    ));
+                if !summary.open_ends.is_empty() {
+                    sections.push(listing("Left open", &summary.open_ends, false, t));
+                }
+                if !summary.happened.is_empty() {
+                    sections.push(listing("What happened", &summary.happened, true, t));
                 }
             }
             None => {
-                top = top.child(
+                // No summary yet: say what is happening about that, and show
+                // the request as the next best thing.
+                let status: Div = if writing {
+                    div().text_color(t.ink3).child("Writing a summary…")
+                } else if let Some(error) = self.failed.get(&key) {
                     div()
-                        .line_height(px(22.))
-                        .text_color(t.ink2)
-                        .line_clamp(8)
-                        .child(if session.first_prompt.is_empty() {
-                            "No summary yet.".to_string()
-                        } else {
-                            session.first_prompt.clone()
-                        }),
-                );
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(t.ink2)
+                                .child(format!("The summary could not be written: {error}")),
+                        )
+                        .child(
+                            action("popover-retry", "Try again", "", false, t)
+                                .on_click(cx.listener(|this, _, _, cx| this.write_summary(cx))),
+                        )
+                } else if self.auto {
+                    div().text_color(t.ink3).child("No summary yet.")
+                } else {
+                    div().flex().child(
+                        action("popover-write", "Write summary", "", false, t)
+                            .on_click(cx.listener(|this, _, _, cx| this.write_summary(cx))),
+                    )
+                };
+                top = top.child(status);
+                if !session.first_prompt.is_empty() {
+                    sections.push(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .pt(px(16.))
+                            .border_t_1()
+                            .border_color(t.line)
+                            .child(label("You asked", t))
+                            .child(
+                                div()
+                                    .line_height(px(22.))
+                                    .text_color(t.ink2)
+                                    .line_clamp(6)
+                                    .child(session.first_prompt.clone()),
+                            ),
+                    );
+                }
             }
         }
 
@@ -570,7 +692,7 @@ impl Popover {
                 .flex_col()
                 .gap(px(18.))
                 .child(top)
-                .children(open_ends),
+                .children(sections),
         )
         .child(actions)
     }
@@ -618,6 +740,34 @@ impl Render for Popover {
     }
 }
 
+/// A titled list inside the summary: open ends as dashes, steps as numbers.
+fn listing(title: &'static str, lines: &[String], numbered: bool, t: &Theme) -> Div {
+    let mut list = div()
+        .flex()
+        .flex_col()
+        .gap(px(5.))
+        .pt(px(16.))
+        .border_t_1()
+        .border_color(t.line)
+        .child(label(title, t));
+    for (i, line) in lines.iter().enumerate() {
+        list = list.child(
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .w(px(16.))
+                        .flex_shrink_0()
+                        .text_color(t.ink3)
+                        .child(if numbered { format!("{}.", i + 1) } else { "–".to_string() }),
+                )
+                .child(div().flex_1().min_w(px(0.)).child(line.clone())),
+        );
+    }
+    list
+}
+
 /// One of the buttons under a session: a name and the key that does the same.
 fn action(
     id: &'static str,
@@ -641,11 +791,13 @@ fn action(
         .when(primary, |el| el.bg(t.accent).text_color(t.on_accent).hover(|style| style.opacity(0.9)))
         .when(!primary, |el| el.border_1().border_color(t.line).hover(move |style| style.bg(fill)))
         .child(name.into())
-        .child(
-            div()
-                .font_family(MONO_FONT)
-                .text_size(px(11.))
-                .when(!primary, |el| el.text_color(t.ink3))
-                .child(key),
-        )
+        .when(!key.is_empty(), |el| {
+            el.child(
+                div()
+                    .font_family(MONO_FONT)
+                    .text_size(px(11.))
+                    .when(!primary, |el| el.text_color(t.ink3))
+                    .child(key),
+            )
+        })
 }
