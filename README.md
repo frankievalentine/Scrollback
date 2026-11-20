@@ -43,9 +43,6 @@ scrolling through transcripts.
 
 ## Screenshots
 
-The sessions shown here are made up. Each picture follows your light or dark
-theme on GitHub.
-
 ### First run
 
 Scrollback shows which tools it found sessions for, and asks whether
