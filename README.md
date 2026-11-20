@@ -123,6 +123,63 @@ xattr -dr com.apple.quarantine /Applications/Scrollback.app
 **First launch on Windows.** SmartScreen may warn about an unrecognised app;
 choose More info, then Run anyway.
 
+## Summaries
+
+Choose who writes them in Settings → Summaries:
+
+| Provider | What you need | Where requests go |
+| --- | --- | --- |
+| **Claude** (default) | [Claude Code](https://claude.com/claude-code) installed and signed in | Through Claude Code, counted towards your Claude plan. Haiku 5.5 or Haiku 4.5. |
+| **Ollama** | [Ollama](https://ollama.com) running, with a model pulled | Nowhere: the model runs on your computer |
+| **OpenAI** | An OpenAI API key | OpenAI. GPT-6 Luna by default. |
+| **OpenCode Go** | An OpenCode Go API key | OpenCode |
+| **Vercel AI Gateway** | A Vercel AI Gateway key | Vercel, then the model's provider |
+| **Cloudflare AI Gateway** | A Cloudflare API token and account id | Cloudflare, then the model's provider |
+| **Other** | Any service with an OpenAI-compatible chat API | Wherever you point it |
+
+API keys are kept in your system's keychain (Keychain on macOS, Credential
+Manager on Windows, the Secret Service on Linux), never in Scrollback's
+settings. A key already set in `OPENAI_API_KEY` or `AI_GATEWAY_API_KEY` is
+picked up without pasting it.
+
+Whichever provider you choose, what is sent for each session is the same:
+your prompts, the agent's replies, and the names and targets of the tools it
+used. Tool output and file contents are never sent. Without a provider set
+up, everything else works and sessions show their first prompt instead.
+Automatic summaries can be turned off in Settings → General.
+
+Smaller local models write rougher summaries than Haiku, and sometimes miss
+where each step began; the summary is still kept when they do.
+
+## Where things are kept
+
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Index and settings | `~/Library/Application Support/Scrollback` | `~/.local/share/scrollback` | `%LOCALAPPDATA%\Scrollback` |
+
+The Linux folder is lower case, like the other tools in `~/.local/share`. A
+folder left from an older version under a different spelling is renamed the
+first time Scrollback starts.
+
+Deleting that folder resets Scrollback; it rebuilds the index on its next
+start and writes the summaries again.
+
+## Command line
+
+The same index is available from a terminal:
+
+```sh
+scrollback list                  # recent sessions
+scrollback search token refresh  # fuzzy search
+scrollback show runyard redesign # a session's summary
+scrollback summarize -n 10       # summarise the ten newest without one
+scrollback export runyard -o runyard.md  # a session as Markdown
+scrollback --help                # everything else
+```
+
+On a Mac the command is built at `target/release/scrollback`; the Linux
+packages install it on your path.
+
 ## Building from source
 
 You need [Rust](https://rustup.rs) (stable) and, on a Mac, the Xcode command
@@ -169,63 +226,6 @@ This leaves a zip in `target\package`, and an installer too if
 [Inno Setup](https://jrsoftware.org/isinfo.php) is installed.
 
 Linux and Windows builds are newer than the Mac one and have had less use.
-
-## Summaries
-
-Choose who writes them in Settings → Summaries:
-
-| Provider | What you need | Where requests go |
-| --- | --- | --- |
-| **Claude** (default) | [Claude Code](https://claude.com/claude-code) installed and signed in | Through Claude Code, counted towards your Claude plan. Haiku 5.5 or Haiku 4.5. |
-| **Ollama** | [Ollama](https://ollama.com) running, with a model pulled | Nowhere: the model runs on your computer |
-| **OpenAI** | An OpenAI API key | OpenAI. GPT-6 Luna by default. |
-| **OpenCode Go** | An OpenCode Go API key | OpenCode |
-| **Vercel AI Gateway** | A Vercel AI Gateway key | Vercel, then the model's provider |
-| **Cloudflare AI Gateway** | A Cloudflare API token and account id | Cloudflare, then the model's provider |
-| **Other** | Any service with an OpenAI-compatible chat API | Wherever you point it |
-
-API keys are kept in your system's keychain (Keychain on macOS, Credential
-Manager on Windows, the Secret Service on Linux), never in Scrollback's
-settings. A key already set in `OPENAI_API_KEY` or `AI_GATEWAY_API_KEY` is
-picked up without pasting it.
-
-Whichever provider you choose, what is sent for each session is the same:
-your prompts, the agent's replies, and the names and targets of the tools it
-used. Tool output and file contents are never sent. Without a provider set
-up, everything else works and sessions show their first prompt instead.
-Automatic summaries can be turned off in Settings → General.
-
-Smaller local models write rougher summaries than Haiku, and sometimes miss
-where each step began; the summary is still kept when they do.
-
-## Command line
-
-The same index is available from a terminal:
-
-```sh
-scrollback list                  # recent sessions
-scrollback search token refresh  # fuzzy search
-scrollback show runyard redesign # a session's summary
-scrollback summarize -n 10       # summarise the ten newest without one
-scrollback export runyard -o runyard.md  # a session as Markdown
-scrollback --help                # everything else
-```
-
-On a Mac the command is built at `target/release/scrollback`; the Linux
-packages install it on your path.
-
-## Where things are kept
-
-| | macOS | Linux | Windows |
-| --- | --- | --- | --- |
-| Index and settings | `~/Library/Application Support/Scrollback` | `~/.local/share/scrollback` | `%LOCALAPPDATA%\Scrollback` |
-
-The Linux folder is lower case, like the other tools in `~/.local/share`. A
-folder left from an older version under a different spelling is renamed the
-first time Scrollback starts.
-
-Deleting that folder resets Scrollback; it rebuilds the index on its next
-start and writes the summaries again.
 
 ## Development
 
