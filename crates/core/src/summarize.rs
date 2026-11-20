@@ -153,7 +153,7 @@ pub fn summarize(session: &Session) -> Result<Written> {
         bail!("the session has no readable conversation");
     }
     let condensed = transcript::condense(session, &events, BUDGET);
-    let (mut value, cost_usd) = ask_claude(INSTRUCTIONS, &schema(), &condensed)?;
+    let (mut value, cost_usd) = crate::provider::ask(INSTRUCTIONS, &schema(), &condensed)?;
     // Taken out before the rest is checked, so an unusable answer here costs
     // the grouping and not the whole summary.
     let starts = value.as_object_mut().and_then(|fields| fields.remove("step_starts"));
@@ -240,10 +240,10 @@ pub fn digest(sessions: &[&Session], days: u32) -> Result<WrittenDigest> {
         "required": ["digest"],
         "additionalProperties": false
     });
-    let (value, cost_usd) = ask_claude(DIGEST_INSTRUCTIONS, &schema, &digest_input(sessions, days))?;
+    let (value, cost_usd) = crate::provider::ask(DIGEST_INSTRUCTIONS, &schema, &digest_input(sessions, days))?;
     let text = value["digest"].as_str().unwrap_or("").trim().to_string();
     if text.is_empty() {
-        bail!("claude returned an empty digest");
+        bail!("the reply had an empty digest");
     }
     Ok(WrittenDigest { text, cost_usd })
 }
@@ -335,7 +335,12 @@ fn without_console(command: &mut Command) -> &mut Command {
     command
 }
 
-fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Value, f64)> {
+pub(crate) fn ask_claude(
+    config: &crate::Config,
+    instructions: &str,
+    schema: &Value,
+    condensed: &str,
+) -> Result<(Value, f64)> {
     let binary = claude_binary().ok_or_else(|| anyhow!("the `claude` command was not found"))?;
     // Run from Scrollback's own folder so no project's CLAUDE.md is picked up,
     // and without session persistence so summaries never appear as sessions.
@@ -350,7 +355,7 @@ fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Va
         // `claude` may itself be a script that needs node or another tool
         // from the same places, which an app not started from a shell lacks.
         .env("PATH", std::env::join_paths(tool_dirs()).unwrap_or_default())
-        .args(["-p", "--model", crate::Config::load().model()])
+        .args(["-p", "--model", config.model()])
         .args(["--no-session-persistence", "--output-format", "json"])
         .args(["--json-schema", &schema.to_string()])
         .args(["--system-prompt", instructions])

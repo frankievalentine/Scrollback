@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// The models a summary can be written with, cheapest first. These are the
-/// names the Claude CLI accepts for `--model`.
-pub const SUMMARY_MODELS: [&str; 3] = ["haiku", "sonnet", "opus"];
+use crate::provider::{Endpoint, Provider, CLAUDE_MODELS};
 
 /// How long a session can be asked to stay quiet before it is summarised.
 pub const QUIET_MINUTES: [u32; 4] = [5, 10, 30, 60];
@@ -30,9 +28,30 @@ pub struct Config {
     /// what it is about before it ends.
     #[serde(default = "yes")]
     pub live_summaries: bool,
-    /// Which model writes summaries; one of `SUMMARY_MODELS`.
+    /// Who writes summaries.
+    #[serde(default)]
+    pub summary_provider: Provider,
+    /// The Claude model, one of `CLAUDE_MODELS`.
     #[serde(default = "haiku")]
     pub summary_model: String,
+    /// Where Ollama is, when not its usual address.
+    #[serde(default)]
+    pub ollama_url: String,
+    /// The Ollama model, by the name Ollama lists it under.
+    #[serde(default)]
+    pub ollama_model: String,
+    /// Which OpenAI-compatible service, and for each the address and model
+    /// chosen, when not the service's defaults. The API key is kept in the
+    /// system keychain, not here.
+    #[serde(default)]
+    pub endpoint: Endpoint,
+    #[serde(default)]
+    pub endpoint_urls: BTreeMap<String, String>,
+    #[serde(default)]
+    pub endpoint_models: BTreeMap<String, String>,
+    /// Cloudflare: the AI Gateway to route through, if any.
+    #[serde(default)]
+    pub cloudflare_gateway: String,
     /// `system`, `light` or `dark`.
     #[serde(default = "system")]
     pub theme: String,
@@ -58,7 +77,7 @@ fn ten() -> u32 {
 }
 
 fn haiku() -> String {
-    SUMMARY_MODELS[0].to_string()
+    CLAUDE_MODELS[0].0.to_string()
 }
 
 fn system() -> String {
@@ -72,7 +91,14 @@ impl Default for Config {
             onboarded: false,
             quiet_minutes: ten(),
             live_summaries: true,
+            summary_provider: Provider::Claude,
             summary_model: haiku(),
+            ollama_url: String::new(),
+            ollama_model: String::new(),
+            endpoint: Endpoint::OpenAi,
+            endpoint_urls: BTreeMap::new(),
+            endpoint_models: BTreeMap::new(),
+            cloudflare_gateway: String::new(),
             theme: system(),
             hidden_sources: Vec::new(),
             folders: BTreeMap::new(),
@@ -89,25 +115,80 @@ impl Config {
     /// The saved settings, or the defaults when none are saved or the file
     /// cannot be read.
     pub fn load() -> Config {
-        std::fs::read_to_string(Config::path())
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+        let Ok(text) = std::fs::read_to_string(Config::path()) else {
+            return Config::default();
+        };
+        serde_json::from_str(&text).unwrap_or_else(|_| Config::lenient(&text))
     }
 
-    /// The model to ask for, falling back to the cheapest when the saved
-    /// name is not one this version knows.
+    /// Settings that do not all read, as when a later version wrote a value
+    /// this one does not know: each setting that does read is kept, rather
+    /// than losing them all to one.
+    fn lenient(text: &str) -> Config {
+        let Ok(serde_json::Value::Object(saved)) = serde_json::from_str::<serde_json::Value>(text) else {
+            return Config::default();
+        };
+        let mut config = serde_json::to_value(Config::default()).expect("the defaults serialise");
+        for (key, value) in saved {
+            let mut trial = config.clone();
+            trial[&key] = value;
+            if serde_json::from_value::<Config>(trial.clone()).is_ok() {
+                config = trial;
+            }
+        }
+        serde_json::from_value(config).unwrap_or_default()
+    }
+
+    /// The Claude model to ask for. A saved choice this version no longer
+    /// offers, such as Sonnet or Opus from an earlier one, becomes Haiku.
     pub fn model(&self) -> &str {
-        SUMMARY_MODELS
+        CLAUDE_MODELS
             .iter()
-            .find(|known| **known == self.summary_model)
-            .copied()
-            .unwrap_or(SUMMARY_MODELS[0])
+            .map(|(id, _)| *id)
+            .find(|known| *known == self.summary_model)
+            .unwrap_or(CLAUDE_MODELS[0].0)
+    }
+
+    pub fn ollama_url(&self) -> String {
+        match self.ollama_url.trim() {
+            "" => crate::provider::default_ollama_url(),
+            url => url.to_string(),
+        }
+    }
+
+    /// The chosen service's address: the one saved, or its default.
+    pub fn endpoint_url(&self) -> String {
+        self.endpoint_urls
+            .get(self.endpoint.slug())
+            .filter(|url| !url.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| self.endpoint.default_url().to_string())
+    }
+
+    pub fn endpoint_model(&self) -> String {
+        self.endpoint_models
+            .get(self.endpoint.slug())
+            .filter(|model| !model.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| self.endpoint.default_model().to_string())
     }
 
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(crate::data_dir())?;
         std::fs::write(Config::path(), serde_json::to_string_pretty(self)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_value_costs_only_its_own_setting() {
+        let config = Config::lenient(r#"{"onboarded": true, "summary_provider": "something-new", "quiet_minutes": 30}"#);
+        assert!(config.onboarded);
+        assert_eq!(config.quiet_minutes, 30);
+        assert_eq!(config.summary_provider, Provider::Claude);
     }
 }

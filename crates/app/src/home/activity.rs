@@ -128,7 +128,7 @@ impl Home {
     /// or out of date. Follows the auto-summarise setting, and waits for
     /// session summaries still being written so the digest is written once.
     pub(super) fn pump_digest(&mut self, cx: &mut Context<Self>) {
-        if self.first_run || !self.claude_found {
+        if self.first_run || !self.summaries_ready {
             return;
         }
         if self.view != View::Activity || !self.config.auto_summarize {

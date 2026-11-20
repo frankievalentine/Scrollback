@@ -127,7 +127,7 @@ pub struct Home {
     /// Showing the first-run screen, which holds everything else back.
     first_run: bool,
     /// Whether the `claude` command, which writes summaries, is installed.
-    claude_found: bool,
+    summaries_ready: bool,
     view: View,
     /// The period the activity view covers, in days.
     range_days: u32,
@@ -174,8 +174,7 @@ impl Home {
             Ok(_) => true,
             Err(_) => !config.onboarded,
         };
-        let claude_found = std::env::var_os("SCROLLBACK_NO_CLAUDE").is_none()
-            && summarize::claude_binary().is_some();
+        let summaries_ready = scrollback_core::provider::ready(&config).is_ok();
         let mut home = Home {
             sessions,
             hits: Vec::new(),
@@ -200,7 +199,7 @@ impl Home {
             typed_at: Instant::now(),
             window_active: true,
             first_run,
-            claude_found,
+            summaries_ready,
             view: View::Sessions,
             range_days: activity::RANGES[0],
             activity: Activity::default(),
@@ -219,7 +218,7 @@ impl Home {
             status,
             focus: cx.focus_handle(),
         };
-        if first_run && !claude_found {
+        if first_run && !summaries_ready {
             home.config.auto_summarize = false;
         }
         home.recompute();
@@ -536,7 +535,7 @@ impl Home {
     /// Does nothing when the setting is off or the plan limit was reported
     /// recently.
     fn pump_summaries(&mut self, cx: &mut Context<Self>) {
-        if self.first_run || !self.claude_found || !self.config.auto_summarize {
+        if self.first_run || !self.summaries_ready || !self.config.auto_summarize {
             return;
         }
         if self.paused_until.is_some_and(|until| Instant::now() < until) {
@@ -578,6 +577,8 @@ impl Home {
         let reread =
             new.hidden_sources != self.config.hidden_sources || new.folders != self.config.folders;
         self.config = new;
+        // A change of provider can make summaries possible, or not.
+        self.summaries_ready = scrollback_core::provider::ready(&self.config).is_ok();
         if reread {
             cx.spawn(async move |this, cx| {
                 let (sessions, status) = cx.background_executor().spawn(async { load() }).await;

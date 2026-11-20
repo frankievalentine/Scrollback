@@ -57,10 +57,15 @@ fn main() -> Result<()> {
         }
         "stats" => stats(),
         "summarize" if args.len() > 1 => {
-            let session = best_match(&args[1..].join(" "))?;
+            let mut session = best_match(&args[1..].join(" "))?;
             let written = summarize::summarize(&session)?;
             Store::open()?.set_summary(&session, &written.summary)?;
-            show(&args[1..].join(" "))
+            // Shown as written: its new title may no longer match the words
+            // it was found by.
+            session.summary = Some(written.summary);
+            session.summary_stale = false;
+            print_summary(&session);
+            Ok(())
         }
         "summarize" => summarize_pending(limit.unwrap_or(5), active, redo, ungrouped),
         "show" => show(&args[1..].join(" ")),
@@ -190,11 +195,15 @@ fn best_match(query: &str) -> Result<Session> {
 }
 
 fn show(query: &str) -> Result<()> {
-    let session = best_match(query)?;
-    print_row(&session);
+    print_summary(&best_match(query)?);
+    Ok(())
+}
+
+fn print_summary(session: &Session) {
+    print_row(session);
     let Some(summary) = &session.summary else {
         println!("\nNo summary yet. Run `scrollback summarize` to write one.");
-        return Ok(());
+        return;
     };
     println!("\n{}  [{}]", summary.title, summary.outcome.label());
     println!("\n{}", summary.summary);
@@ -216,7 +225,6 @@ fn show(query: &str) -> Result<()> {
     if session.summary_stale {
         println!("\nThe session has had activity since this summary was written.");
     }
-    Ok(())
 }
 
 fn summarize_pending(limit: usize, include_active: bool, redo: bool, ungrouped: bool) -> Result<()> {

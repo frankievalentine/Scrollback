@@ -4,7 +4,7 @@
 
 Your coding-agent sessions in one place, each with a short summary of what
 happened and what was left open, written by Claude Haiku through the Claude
-Code command line you already use.
+Code command line you already use, or by a model of your choosing.
 
 Scrollback reads the session history your coding agents already keep
 (Claude Code, Codex, OpenCode, Cursor, GitHub Copilot, Grok and more),
@@ -26,7 +26,8 @@ scrolling through transcripts.
   summaries and every message in every session, with results as you type.
 - **Summaries by default.** Once a session goes quiet, Scrollback writes a
   title, a short summary, how it ended and anything left to pick up. Sessions
-  you are still working in are summarised as you go.
+  you are still working in are summarised as you go. Claude Haiku writes them
+  unless you choose Ollama or another service.
 - **Transcripts grouped by step.** Open a session to read it as the steps the
   summary describes, each folding open to the turns behind it.
 - **One-step resume.** Copy the command that reopens a session in the tool it
@@ -171,15 +172,31 @@ Linux and Windows builds are newer than the Mac one and have had less use.
 
 ## Summaries
 
-Summaries are written by the [Claude Code](https://claude.com/claude-code)
-command-line tool, using the login it already has, so there is no API key to
-set up. If `claude` is installed and signed in, summaries start on their own;
-if not, everything else works and sessions show their first prompt instead.
+Choose who writes them in Settings → Summaries:
 
-What is sent for each session: your prompts, the agent's replies, and the
-names and targets of the tools it used. Tool output and file contents are not
-sent. Summaries count towards your Claude plan; Haiku is used by default, and
-Settings → Summaries can change the model or turn automatic summaries off.
+| Provider | What you need | Where requests go |
+| --- | --- | --- |
+| **Claude** (default) | [Claude Code](https://claude.com/claude-code) installed and signed in | Through Claude Code, counted towards your Claude plan. Haiku 5.5 or Haiku 4.5. |
+| **Ollama** | [Ollama](https://ollama.com) running, with a model pulled | Nowhere: the model runs on your computer |
+| **OpenAI** | An OpenAI API key | OpenAI. GPT-6 Luna by default. |
+| **OpenCode Go** | An OpenCode Go API key | OpenCode |
+| **Vercel AI Gateway** | A Vercel AI Gateway key | Vercel, then the model's provider |
+| **Cloudflare AI Gateway** | A Cloudflare API token and account id | Cloudflare, then the model's provider |
+| **Other** | Any service with an OpenAI-compatible chat API | Wherever you point it |
+
+API keys are kept in your system's keychain (Keychain on macOS, Credential
+Manager on Windows, the Secret Service on Linux), never in Scrollback's
+settings. A key already set in `OPENAI_API_KEY` or `AI_GATEWAY_API_KEY` is
+picked up without pasting it.
+
+Whichever provider you choose, what is sent for each session is the same:
+your prompts, the agent's replies, and the names and targets of the tools it
+used. Tool output and file contents are never sent. Without a provider set
+up, everything else works and sessions show their first prompt instead.
+Automatic summaries can be turned off in Settings → General.
+
+Smaller local models write rougher summaries than Haiku, and sometimes miss
+where each step began; the summary is still kept when they do.
 
 ## Command line
 

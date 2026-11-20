@@ -6,6 +6,8 @@ pub mod activity;
 pub mod config;
 pub mod export;
 pub mod model;
+pub mod provider;
+pub mod secrets;
 pub mod search;
 pub mod sources;
 pub mod store;
@@ -13,7 +15,8 @@ pub mod summarize;
 pub mod transcript;
 
 pub use activity::Activity;
-pub use config::{Config, QUIET_MINUTES, SUMMARY_MODELS};
+pub use config::{Config, QUIET_MINUTES};
+pub use provider::{Endpoint, Provider};
 pub use model::{Harness, Origin, Outcome, Session, Summary};
 pub use store::{Digest, MessageHit, Store};
 

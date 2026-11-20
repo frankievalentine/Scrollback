@@ -11,7 +11,10 @@ use gpui::{
     Global, PathPromptOptions, SharedString, Stateful, Window, WindowBounds,
     WindowHandle, WindowOptions,
 };
-use scrollback_core::{sources, summarize, Config, Harness, Origin, QUIET_MINUTES, SUMMARY_MODELS};
+use crate::field::{Committed, TextField};
+use gpui::Entity;
+use scrollback_core::provider::{self, CLAUDE_MODELS};
+use scrollback_core::{secrets, sources, summarize, Config, Endpoint, Harness, Origin, Provider, QUIET_MINUTES};
 use std::path::Path;
 
 /// The saved settings. Anything that needs to follow changes observes this.
@@ -86,7 +89,7 @@ pub fn open(cx: &mut App, tab: Tab) {
             ..Default::default()
         },
         |window, cx| {
-            let view = cx.new(|cx| SettingsView::new(tab, cx));
+            let view = cx.new(|cx| SettingsView::new(tab, window, cx));
             window.focus(&view.read(cx).focus);
             view
         },
@@ -112,10 +115,27 @@ pub struct SettingsView {
     at_login: bool,
     /// Why the last change to that failed.
     login_error: Option<String>,
+    /// The typed settings on the Summaries page.
+    fields: Fields,
+    /// The models Ollama has, once asked; or why it could not be asked.
+    ollama_models: Option<Result<Vec<String>, String>>,
+    /// The models the chosen OpenAI-compatible service offers, likewise.
+    endpoint_models: Option<Result<Vec<String>, String>>,
+    /// Why the last API key could not be saved.
+    key_error: Option<String>,
+}
+
+struct Fields {
+    ollama_url: Entity<TextField>,
+    ollama_model: Entity<TextField>,
+    endpoint_url: Entity<TextField>,
+    endpoint_model: Entity<TextField>,
+    api_key: Entity<TextField>,
+    cloudflare_gateway: Entity<TextField>,
 }
 
 impl SettingsView {
-    fn new(tab: Tab, cx: &mut Context<Self>) -> SettingsView {
+    fn new(tab: Tab, window: &mut Window, cx: &mut Context<Self>) -> SettingsView {
         // The session window can change settings too (its auto-summarise
         // switch, the first-run answer), so follow them here as well.
         cx.observe_global::<Settings>(|this, cx| {
@@ -123,16 +143,107 @@ impl SettingsView {
             cx.notify();
         })
         .detach();
-        SettingsView {
+        let config = cx.global::<Settings>().0.clone();
+        let fields = Fields::new(&config, window, cx);
+        let mut view = SettingsView {
             tab,
-            config: cx.global::<Settings>().0.clone(),
+            config: config.clone(),
             scroll: gpui::ScrollHandle::new(),
             measured: Default::default(),
             focus: cx.focus_handle(),
             menu_open: None,
             at_login: crate::login::enabled(),
             login_error: None,
+            fields,
+            ollama_models: None,
+            endpoint_models: None,
+            key_error: None,
+        };
+        match config.summary_provider {
+            Provider::Ollama => view.load_ollama_models(cx),
+            Provider::OpenAiCompatible => view.load_endpoint_models(cx),
+            Provider::Claude => {}
         }
+        view
+    }
+
+    /// The models Ollama has, asked for in the background.
+    fn load_ollama_models(&mut self, cx: &mut Context<Self>) {
+        let url = self.config.ollama_url();
+        self.ollama_models = None;
+        // Development captures are taken before an answer could arrive, so
+        // they ask first.
+        if std::env::var_os("SCROLLBACK_DEV_SETTINGS").is_some() {
+            self.ollama_models = Some(provider::ollama_models(&url).map_err(|err| format!("{err:#}")));
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let models = cx
+                .background_executor()
+                .spawn(async move { provider::ollama_models(&url).map_err(|err| format!("{err:#}")) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.ollama_models = Some(models);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The models the chosen service offers, asked for in the background.
+    fn load_endpoint_models(&mut self, cx: &mut Context<Self>) {
+        self.endpoint_models = None;
+        if !self.config.endpoint.lists_models() {
+            return;
+        }
+        if std::env::var_os("SCROLLBACK_DEV_SETTINGS").is_some() {
+            self.endpoint_models = Some(provider::endpoint_models(&self.config).map_err(|err| format!("{err:#}")));
+            return;
+        }
+        let config = self.config.clone();
+        cx.spawn(async move |this, cx| {
+            let models = cx
+                .background_executor()
+                .spawn(async move { provider::endpoint_models(&config).map_err(|err| format!("{err:#}")) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.endpoint_models = Some(models);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn choose_provider(&mut self, chosen: Provider, cx: &mut Context<Self>) {
+        self.change(cx, |c| c.summary_provider = chosen);
+        match chosen {
+            Provider::Ollama => self.load_ollama_models(cx),
+            Provider::OpenAiCompatible => self.load_endpoint_models(cx),
+            Provider::Claude => {}
+        }
+    }
+
+    /// Switch service, showing that service's address, model and key.
+    fn choose_endpoint(&mut self, endpoint: Endpoint, cx: &mut Context<Self>) {
+        self.change(cx, |c| c.endpoint = endpoint);
+        self.key_error = None;
+        let (url, model) = (self.config.endpoint_url(), self.config.endpoint_model());
+        self.fields.endpoint_url.update(cx, |f, cx| f.set_text(url, cx));
+        self.fields.endpoint_model.update(cx, |f, cx| f.set_text(model, cx));
+        self.fields.api_key.update(cx, |f, cx| f.set_text("", cx));
+        self.load_endpoint_models(cx);
+    }
+
+    fn save_key(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+        self.key_error = secrets::set_api_key(self.config.endpoint, key.as_deref()).err();
+        self.fields.api_key.update(cx, |f, cx| f.set_text("", cx));
+        // Readiness depends on the key, so everything that follows the
+        // settings is told, though nothing in the file changed.
+        store(self.config.clone(), cx);
+        self.load_endpoint_models(cx);
+        cx.notify();
     }
 
     /// Apply one change and save it.
@@ -368,60 +479,268 @@ impl SettingsView {
     }
 
     fn summaries(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut models = segmented(t);
-        for (i, model) in SUMMARY_MODELS.into_iter().enumerate() {
-            let mut name = model.to_string();
-            if let Some(first) = name.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
-            models = models.child(
-                segment(("model", i), name, self.config.model() == model, t).on_click(cx.listener(
-                    move |this, _, _, cx| this.change(cx, |c| c.summary_model = model.to_string()),
-                )),
+        let chosen = self.config.summary_provider;
+        let mut providers = segmented(t);
+        for (i, each) in Provider::ALL.into_iter().enumerate() {
+            providers = providers.child(
+                segment(("provider", i), each.name(), chosen == each, t)
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_provider(each, cx))),
             );
         }
-        let found = summarize::claude_binary();
-        let tool = match &found {
-            Some(path) => format!("Found at {}", path.display()),
-            None => "Not found. Summaries cannot be written until Claude Code is installed.".to_string(),
+        let ready = provider::ready(&self.config);
+        let status = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(text::SMALL))
+            .text_color(if ready.is_ok() { t.ink2 } else { t.ink })
+            .child(
+                div()
+                    .size(px(7.))
+                    .rounded(px(4.))
+                    .bg(if ready.is_ok() { gpui::rgb(0x3FA66B).into() } else { t.ink3 }),
+            )
+            .child(match &ready {
+                Ok(()) => "Ready to write summaries.".to_string(),
+                Err(why) => why.clone(),
+            });
+        let mut page = page()
+            .child(row("Written by", "Who writes each session's summary.", providers, t))
+            .child(match chosen {
+                Provider::Claude => self.claude_settings(t, cx),
+                Provider::Ollama => self.ollama_settings(t, cx),
+                Provider::OpenAiCompatible => self.endpoint_settings(t, cx),
+            })
+            .child(status);
+        let sent = match chosen {
+            Provider::Claude => {
+                "Requests go through the Claude Code command line and count towards your Claude plan."
+            }
+            Provider::Ollama => "Requests go to Ollama on this computer, so nothing leaves it.",
+            Provider::OpenAiCompatible => {
+                "Requests go to the service above with your API key, and are billed by it."
+            }
         };
-        page()
-            .child(row(
-                "Written by",
-                "Haiku is the quickest and uses the least of your Claude plan. \
-                 Sonnet and Opus read more carefully and use more.",
-                models,
-                t,
-            ))
+        page = page.child(
+            div()
+                .pt(px(18.))
+                .border_t_1()
+                .border_color(t.line)
+                .text_size(px(text::SMALL))
+                .line_height(px(20.))
+                .text_color(t.ink2)
+                .child(format!(
+                    "A summary request sends your prompts, the agent's replies, and the names of the \
+                     tools and files involved. Tool output and file contents are never sent. {sent}"
+                )),
+        );
+        page
+    }
+
+    /// One labelled field, its name above it.
+    fn field_row(name: &'static str, about: Option<String>, field: &Entity<TextField>, t: &Theme) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(div().font_weight(FontWeight::MEDIUM).child(name))
+            .child(field.clone())
+            .children(about.map(|about| {
+                div().text_size(px(text::CAPTION)).line_height(px(17.)).text_color(t.ink3).child(about)
+            }))
+    }
+
+    fn claude_settings(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let mut models = segmented(t);
+        for (i, (id, name)) in CLAUDE_MODELS.into_iter().enumerate() {
+            models = models.child(
+                segment(("model", i), name, self.config.model() == id, t)
+                    .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.summary_model = id.to_string()))),
+            );
+        }
+        let tool = match summarize::claude_binary() {
+            Some(path) => format!("Found at {}", path.display()),
+            None => "Not found. Install Claude Code and sign in, or choose another provider.".to_string(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.))
+            .child(row("Model", "Haiku is quick, and uses little of your Claude plan.", models, t))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(4.))
                     .child(div().font_weight(FontWeight::MEDIUM).child("The claude command"))
-                    .child(
-                        div()
-                            .font_family(mono())
-                            .text_size(px(text::CAPTION))
-                            .text_color(t.ink3)
-                            .child(tool),
-                    ),
+                    .child(div().font_family(mono()).text_size(px(text::CAPTION)).text_color(t.ink3).child(tool)),
             )
-            .child(
+    }
+
+    fn ollama_settings(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let installed: Div = match &self.ollama_models {
+            None => div().text_size(px(text::CAPTION)).text_color(t.ink3).child("Asking Ollama for its models…"),
+            Some(Err(_)) => div()
+                .text_size(px(text::CAPTION))
+                .line_height(px(17.))
+                .text_color(t.ink2)
+                .child(format!(
+                    "Ollama is not answering at {}. Install it from ollama.com and start it, then pull a \
+                     model, such as `ollama pull llama3.2`.",
+                    self.config.ollama_url()
+                )),
+            Some(Ok(models)) if models.is_empty() => div()
+                .text_size(px(text::CAPTION))
+                .text_color(t.ink2)
+                .child("Ollama has no models yet. Pull one, such as `ollama pull llama3.2`."),
+            Some(Ok(models)) => self.model_chips("ollama-model", models, &self.config.ollama_model, true, t, cx),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(Self::field_row("Model", None, &self.fields.ollama_model, t))
+            .child(installed)
+            .child(Self::field_row(
+                "Address",
+                Some("Where Ollama is running. The usual address is filled in.".to_string()),
+                &self.fields.ollama_url,
+                t,
+            ))
+    }
+
+    /// Models to pick from, as small buttons; the chosen one is marked.
+    fn model_chips(
+        &self,
+        id: &'static str,
+        models: &[String],
+        chosen: &str,
+        ollama: bool,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut chips = div().flex().flex_wrap().gap(px(6.));
+        // A long catalogue is cut short; the field takes any name.
+        for (i, name) in models.iter().take(40).enumerate() {
+            let picked = chosen == name;
+            let pick = name.clone();
+            let fill = t.fill;
+            chips = chips.child(
                 div()
-                    .pt(px(18.))
-                    .border_t_1()
+                    .id((id, i))
+                    .reachable(t)
+                    .h(px(26.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(if picked { t.accent } else { t.line })
+                    .when(picked, |el| el.bg(fill))
+                    .font_family(mono())
+                    .text_size(px(text::CAPTION))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(fill))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let pick = pick.clone();
+                        if ollama {
+                            this.fields.ollama_model.update(cx, |f, cx| f.set_text(pick.clone(), cx));
+                            this.change(cx, |c| c.ollama_model = pick);
+                        } else {
+                            let slug = this.config.endpoint.slug().to_string();
+                            this.fields.endpoint_model.update(cx, |f, cx| f.set_text(pick.clone(), cx));
+                            this.change(cx, |c| {
+                                c.endpoint_models.insert(slug, pick);
+                            });
+                        }
+                    }))
+                    .child(name.clone()),
+            );
+        }
+        let heading = if ollama { "On this computer" } else { "Offered by this service" };
+        let mut list = div().flex().flex_col().gap(px(6.)).child(label(heading, t)).child(chips);
+        if models.len() > 40 {
+            list = list.child(
+                div()
+                    .text_size(px(text::CAPTION))
+                    .text_color(t.ink3)
+                    .child(format!("and {} more; type any of them in the field above.", models.len() - 40)),
+            );
+        }
+        list
+    }
+
+    fn endpoint_settings(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let endpoint = self.config.endpoint;
+        let mut services = segmented(t);
+        for (i, each) in Endpoint::ALL.into_iter().enumerate() {
+            services = services.child(
+                segment(("endpoint", i), each.short_name(), endpoint == each, t)
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_endpoint(each, cx))),
+            );
+        }
+        let saved = secrets::api_key_saved(endpoint);
+        let from_env = !saved && secrets::api_key(endpoint).is_some();
+        let key_about = match (saved, from_env) {
+            (true, _) => "A key is saved in your system keychain. Paste another to replace it.".to_string(),
+            (false, true) => "Using the key from your environment. Paste one to save it instead.".to_string(),
+            (false, false) => "Saved in your system keychain, never in Scrollback's settings.".to_string(),
+        };
+        let url_about = match endpoint {
+            Endpoint::Cloudflare => Some(
+                "Put your account id in place of ACCOUNT_ID. The key is a Cloudflare API token with \
+                 Workers AI access."
+                    .to_string(),
+            ),
+            Endpoint::Vercel => Some("Models are named provider/model, such as openai/gpt-6-luna.".to_string()),
+            Endpoint::OpenCodeGo => Some("Uses the API key from your OpenCode Go subscription.".to_string()),
+            _ => None,
+        };
+        let mut block = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(services)
+            .child(Self::field_row("Address", url_about, &self.fields.endpoint_url, t))
+            .child(Self::field_row("Model", None, &self.fields.endpoint_model, t))
+            .children(match &self.endpoint_models {
+                Some(Ok(models)) if !models.is_empty() => {
+                    Some(self.model_chips("endpoint-model", models, &self.config.endpoint_model(), false, t, cx))
+                }
+                _ => None,
+            })
+            .child(Self::field_row("API key", Some(key_about), &self.fields.api_key, t));
+        if saved {
+            let fill = t.fill;
+            block = block.child(div().flex().child(
+                div()
+                    .id("remove-key")
+                    .reachable(t)
+                    .h(px(28.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(7.))
+                    .border_1()
                     .border_color(t.line)
                     .text_size(px(text::SMALL))
-                    .line_height(px(20.))
-                    .text_color(t.ink2)
-                    .child(
-                        "A summary request sends your prompts, the agent's replies, and the names \
-                         of the tools and files involved. Tool output and file contents are \
-                         never sent. Requests go through the Claude CLI and count towards \
-                         your Claude plan.",
-                    ),
-            )
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(fill))
+                    .on_click(cx.listener(|this, _, _, cx| this.save_key(None, cx)))
+                    .child("Remove the saved key"),
+            ));
+        }
+        if endpoint == Endpoint::Cloudflare {
+            block = block.child(Self::field_row(
+                "AI Gateway",
+                Some("The id of the gateway to route through. Leave empty to call Cloudflare directly.".to_string()),
+                &self.fields.cloudflare_gateway,
+                t,
+            ));
+        }
+        block.children(self.key_error.as_ref().map(|err| {
+            div().text_size(px(text::SMALL)).text_color(t.ink2).child(format!("The keychain refused: {err}"))
+        }))
     }
 
     fn about(&self, t: &Theme) -> Div {
@@ -571,6 +890,63 @@ impl Render for SettingsView {
 impl chrome::Menus for SettingsView {
     fn open_menu(&mut self) -> &mut Option<usize> {
         &mut self.menu_open
+    }
+}
+
+impl Fields {
+    fn new(config: &Config, window: &mut Window, cx: &mut Context<SettingsView>) -> Fields {
+        let make = |text: String, placeholder: &str, secret: bool, window: &mut Window, cx: &mut Context<SettingsView>| {
+            let placeholder = placeholder.to_string();
+            cx.new(|cx| {
+                let field = TextField::new(text, placeholder, window, cx).code();
+                if secret { field.secret() } else { field }
+            })
+        };
+        let fields = Fields {
+            ollama_url: make(config.ollama_url(), "http://127.0.0.1:11434", false, window, cx),
+            ollama_model: make(config.ollama_model.clone(), "llama3.2", false, window, cx),
+            endpoint_url: make(config.endpoint_url(), "https://…/v1", false, window, cx),
+            endpoint_model: make(config.endpoint_model(), "model name", false, window, cx),
+            api_key: make(String::new(), "Paste a key", true, window, cx),
+            cloudflare_gateway: make(config.cloudflare_gateway.clone(), "my-gateway", false, window, cx),
+        };
+        cx.subscribe(&fields.ollama_url, |this, _, Committed(text), cx| {
+            let text = text.clone();
+            this.change(cx, |c| c.ollama_url = text);
+            this.load_ollama_models(cx);
+        })
+        .detach();
+        cx.subscribe(&fields.ollama_model, |this, _, Committed(text), cx| {
+            let text = text.clone();
+            this.change(cx, |c| c.ollama_model = text);
+        })
+        .detach();
+        cx.subscribe(&fields.endpoint_url, |this, _, Committed(text), cx| {
+            let (slug, text) = (this.config.endpoint.slug().to_string(), text.clone());
+            this.change(cx, |c| {
+                c.endpoint_urls.insert(slug, text);
+            });
+        })
+        .detach();
+        cx.subscribe(&fields.endpoint_model, |this, _, Committed(text), cx| {
+            let (slug, text) = (this.config.endpoint.slug().to_string(), text.clone());
+            this.change(cx, |c| {
+                c.endpoint_models.insert(slug, text);
+            });
+        })
+        .detach();
+        cx.subscribe(&fields.api_key, |this, _, Committed(text), cx| {
+            if !text.is_empty() {
+                this.save_key(Some(text.clone()), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&fields.cloudflare_gateway, |this, _, Committed(text), cx| {
+            let text = text.clone();
+            this.change(cx, |c| c.cloudflare_gateway = text);
+        })
+        .detach();
+        fields
     }
 }
 

@@ -59,7 +59,7 @@ impl Home {
     /// Pick whether summaries are written unasked. Without the `claude`
     /// command there is nothing to write them with, so that stays off.
     fn choose_auto(&mut self, auto: bool, cx: &mut Context<Self>) {
-        self.config.auto_summarize = auto && self.claude_found;
+        self.config.auto_summarize = auto && self.summaries_ready;
         cx.notify();
     }
 
@@ -139,14 +139,17 @@ impl Home {
                 t,
                 cx,
             ));
-        if !self.claude_found {
+        if !self.summaries_ready {
             choice = choice.child(
                 div()
                     .pt(px(2.))
                     .text_size(px(text::SMALL))
                     .line_height(px(19.))
                     .text_color(t.ink2)
-                    .child("The claude command was not found, so summaries cannot be written yet."),
+                    .child(match scrollback_core::provider::ready(&self.config) {
+                        Err(why) => format!("{why} Summaries can be set up in Settings later."),
+                        Ok(()) => String::new(),
+                    }),
             );
         }
 
@@ -268,7 +271,7 @@ impl Home {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.config.auto_summarize == auto;
-        let available = !auto || self.claude_found;
+        let available = !auto || self.summaries_ready;
         let (accent, raise) = (t.accent, t.raise);
         div()
             .id(id)

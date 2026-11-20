@@ -5,6 +5,7 @@
 mod app_menu;
 mod background;
 mod chrome;
+mod field;
 mod home;
 mod login;
 mod markdown;

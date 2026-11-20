@@ -55,7 +55,7 @@ pub fn start(cx: &mut App) {
 /// those gone quiet, and those in use that have moved on. Returns the
 /// sessions that failed, with why.
 fn pass(config: &scrollback_core::Config, skip: &HashSet<String>) -> Vec<(String, String)> {
-    if std::env::var_os("SCROLLBACK_NO_CLAUDE").is_some() || summarize::claude_binary().is_none() {
+    if scrollback_core::provider::ready(config).is_err() {
         return Vec::new();
     }
     let sessions = Store::open().and_then(|mut store| {
