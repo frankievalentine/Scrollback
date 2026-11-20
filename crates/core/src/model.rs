@@ -56,16 +56,28 @@ pub enum Harness {
     Pi,
     Cursor,
     Antigravity,
+    Fx,
+    Grok,
+    Hermes,
+    Copilot,
+    CopilotChat,
+    Amp,
 }
 
 impl Harness {
-    pub const ALL: [Harness; 6] = [
+    pub const ALL: [Harness; 12] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::OpenCode,
         Harness::Pi,
         Harness::Cursor,
         Harness::Antigravity,
+        Harness::Fx,
+        Harness::Grok,
+        Harness::Hermes,
+        Harness::Copilot,
+        Harness::CopilotChat,
+        Harness::Amp,
     ];
 
     /// Stable identifier used in the index and in session keys.
@@ -77,6 +89,12 @@ impl Harness {
             Harness::Pi => "pi",
             Harness::Cursor => "cursor",
             Harness::Antigravity => "antigravity",
+            Harness::Fx => "fx",
+            Harness::Grok => "grok",
+            Harness::Hermes => "hermes",
+            Harness::Copilot => "copilot",
+            Harness::CopilotChat => "copilot-chat",
+            Harness::Amp => "amp",
         }
     }
 
@@ -88,6 +106,12 @@ impl Harness {
             Harness::Pi => "pi",
             Harness::Cursor => "Cursor",
             Harness::Antigravity => "Antigravity",
+            Harness::Fx => "fx",
+            Harness::Grok => "Grok",
+            Harness::Hermes => "Hermes",
+            Harness::Copilot => "Copilot CLI",
+            Harness::CopilotChat => "Copilot",
+            Harness::Amp => "Amp",
         }
     }
 
@@ -105,6 +129,12 @@ impl Harness {
             Harness::Pi => Origin::Pi,
             Harness::Cursor => Origin::Cursor,
             Harness::Antigravity => Origin::Antigravity,
+            Harness::Fx => Origin::Fx,
+            Harness::Grok => Origin::Grok,
+            Harness::Hermes => Origin::Hermes,
+            Harness::Copilot => Origin::Copilot,
+            Harness::CopilotChat => Origin::CopilotChat,
+            Harness::Amp => Origin::Amp,
         }
     }
 }
@@ -124,11 +154,18 @@ pub enum Origin {
     Pi,
     Cursor,
     Antigravity,
+    Fx,
+    Grok,
+    Hermes,
+    Copilot,
+    CopilotChat,
+    Amp,
     T3Code,
+    Paseo,
 }
 
 impl Origin {
-    pub const ALL: [Origin; 9] = [
+    pub const ALL: [Origin; 16] = [
         Origin::ClaudeCode,
         Origin::ClaudeDesktop,
         Origin::Codex,
@@ -137,7 +174,14 @@ impl Origin {
         Origin::Pi,
         Origin::Cursor,
         Origin::Antigravity,
+        Origin::Fx,
+        Origin::Grok,
+        Origin::Hermes,
+        Origin::Copilot,
+        Origin::CopilotChat,
+        Origin::Amp,
         Origin::T3Code,
+        Origin::Paseo,
     ];
 
     /// Stable identifier used in the index.
@@ -151,7 +195,14 @@ impl Origin {
             Origin::Pi => "pi",
             Origin::Cursor => "cursor",
             Origin::Antigravity => "antigravity",
+            Origin::Fx => "fx",
+            Origin::Grok => "grok",
+            Origin::Hermes => "hermes",
+            Origin::Copilot => "copilot",
+            Origin::CopilotChat => "copilot-chat",
+            Origin::Amp => "amp",
             Origin::T3Code => "t3-code",
+            Origin::Paseo => "paseo",
         }
     }
 
@@ -167,12 +218,26 @@ impl Origin {
             Origin::Pi => "pi",
             Origin::Cursor => "Cursor",
             Origin::Antigravity => "Antigravity",
+            Origin::Fx => "fx",
+            Origin::Grok => "Grok",
+            Origin::Hermes => "Hermes",
+            Origin::Copilot => "Copilot CLI",
+            Origin::CopilotChat => "Copilot",
+            Origin::Amp => "Amp",
             Origin::T3Code => "T3 Code",
+            Origin::Paseo => "Paseo",
         }
     }
 
     pub fn from_slug(slug: &str) -> Option<Origin> {
         Origin::ALL.into_iter().find(|o| o.slug() == slug)
+    }
+
+    /// Whether the sidebar lists this source even with no sessions: the
+    /// first command-line tools Scrollback read. Others appear once they
+    /// have sessions.
+    pub fn always_listed(self) -> bool {
+        matches!(self, Origin::ClaudeCode | Origin::Codex | Origin::OpenCode | Origin::Pi)
     }
 
     /// Whether this is an app that runs sessions, as opposed to a harness's
@@ -184,7 +249,9 @@ impl Origin {
                 | Origin::CodexDesktop
                 | Origin::Cursor
                 | Origin::Antigravity
+                | Origin::CopilotChat
                 | Origin::T3Code
+                | Origin::Paseo
         )
     }
 }

@@ -2,15 +2,22 @@
 //! `parse(path)`, so the indexer can skip files that have not changed.
 //! Database-backed harnesses expose `scan()`.
 
+pub mod amp;
 pub mod antigravity;
 pub mod claude_code;
+pub mod copilot;
+pub mod fx;
+pub mod grok;
+pub mod hermes;
+pub mod paseo;
+pub mod vscode;
 pub mod codex;
 pub mod cursor;
 pub mod opencode;
 pub mod pi;
 pub mod t3code;
 
-use crate::model::Harness;
+use crate::model::{Harness, Session};
 use std::path::{Path, PathBuf};
 
 /// The folder a harness keeps its sessions in, unless the settings name
@@ -32,6 +39,19 @@ pub fn default_folder(harness: Harness) -> PathBuf {
             .join("sessions"),
         Harness::Cursor => crate::app_support().join("Cursor").join("User"),
         Harness::Antigravity => home.join(".gemini").join("antigravity"),
+        Harness::Fx => or_home("FX_HOME", ".fx").join("sessions"),
+        Harness::Grok => or_home("GROK_HOME", ".grok").join("sessions"),
+        Harness::Hermes => crate::env_dir("HERMES_HOME").unwrap_or_else(|| {
+            match cfg!(windows) {
+                true => crate::env_dir("LOCALAPPDATA")
+                    .unwrap_or_else(|| home.join("AppData").join("Local"))
+                    .join("hermes"),
+                false => home.join(".hermes"),
+            }
+        }),
+        Harness::Copilot => or_home("COPILOT_HOME", ".copilot"),
+        Harness::CopilotChat => crate::app_support().join("Code").join("User"),
+        Harness::Amp => crate::xdg_data().join("amp"),
     }
 }
 
@@ -132,6 +152,159 @@ pub(crate) fn typed_prompt(text: &str) -> Option<&str> {
         || rest.starts_with("Caveat:")
         || rest.starts_with("[Request interrupted");
     (!noise).then_some(rest)
+}
+
+/// The file, folder or command a tool call was aimed at, from its
+/// arguments, whatever the harness calls them.
+pub(crate) fn tool_target(args: &serde_json::Value) -> Option<String> {
+    // Arguments sometimes arrive as a JSON string of their own.
+    if let Some(raw) = args.as_str() {
+        return serde_json::from_str::<serde_json::Value>(raw).ok().and_then(|v| tool_target(&v));
+    }
+    const KEYS: [&str; 12] = [
+        "file_path", "path", "filePath", "target_file", "file", "command", "cmd", "pattern",
+        "query", "url", "glob", "commandLine",
+    ];
+    for key in KEYS {
+        match &args[key] {
+            serde_json::Value::String(text) if !text.trim().is_empty() => {
+                return Some(crate::squash(text, 120));
+            }
+            serde_json::Value::Array(parts) => {
+                let joined: Vec<&str> = parts.iter().filter_map(|p| p.as_str()).collect();
+                if !joined.is_empty() {
+                    return Some(crate::squash(&joined.join(" "), 120));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What a reader found in a session, in order, each with its time.
+#[derive(Default)]
+pub(crate) struct Found {
+    pub events: Vec<(i64, crate::transcript::Event)>,
+    pub cwd: Option<String>,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub branch: Option<String>,
+    pub parent: Option<String>,
+    pub started_ms: Option<i64>,
+    pub updated_ms: Option<i64>,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub tokens_cached: u64,
+}
+
+impl Found {
+    pub fn push(&mut self, ts: i64, event: crate::transcript::Event) {
+        self.events.push((ts, event));
+    }
+
+    /// The session these make: counts, times, first prompt and title.
+    pub fn session(&self, harness: Harness, id: &str, source: &str) -> Session {
+        use crate::transcript::Event;
+        let mut session = Session::new(harness, id, source);
+        if let Some(started) = self.started_ms {
+            session.touch(started);
+        }
+        for (ts, event) in &self.events {
+            if *ts > 0 {
+                session.touch(*ts);
+            }
+            match event {
+                Event::Prompt(text) => {
+                    session.user_turns += 1;
+                    if session.first_prompt.is_empty() {
+                        session.first_prompt = crate::squash(text, 600);
+                    }
+                }
+                Event::Reply(_) => session.assistant_turns += 1,
+                Event::Tool { .. } => session.tool_calls += 1,
+                Event::Note(_) => {}
+            }
+        }
+        if let Some(updated) = self.updated_ms {
+            if updated > session.updated_ms {
+                session.updated_ms = updated;
+            }
+        }
+        session.cwd = self.cwd.clone().unwrap_or_default();
+        session.model = self.model.clone();
+        session.branch = self.branch.clone();
+        session.parent = self.parent.clone();
+        session.tokens_in = self.tokens_in;
+        session.tokens_out = self.tokens_out;
+        session.tokens_cached = self.tokens_cached;
+        session.title = self
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| crate::squash(&session.first_prompt, 90));
+        session
+    }
+
+    pub fn into_events(self) -> Vec<crate::transcript::Event> {
+        self.events.into_iter().map(|(_, event)| event).collect()
+    }
+}
+
+/// Read a JSON Lines file, skipping lines that are not JSON.
+pub(crate) fn json_lines(path: &Path) -> anyhow::Result<Vec<serde_json::Value>> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)?;
+    Ok(std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str(&line).ok())
+        .collect())
+}
+
+/// Turn `file:///Users/me/My%20Project` into a path; Windows drives become
+/// `C:\...`.
+pub(crate) fn file_uri_path(uri: &str) -> Option<String> {
+    let encoded = uri.strip_prefix("file://")?;
+    let bytes = encoded.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| encoded.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    let path = String::from_utf8(out).ok()?;
+    let b = path.as_bytes();
+    let drive = b.len() > 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':';
+    let path = if drive { path[1..].replace('/', "\\") } else { path };
+    let path = path.trim_end_matches(['/', '\\']).to_string();
+    (!path.is_empty()).then_some(path)
+}
+
+/// Unix milliseconds from a timestamp in any of the shapes harnesses use:
+/// RFC 3339 text, seconds, or milliseconds.
+pub(crate) fn any_ms(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::String(text) => crate::parse_ts(text),
+        serde_json::Value::Number(n) => {
+            let x = n.as_f64()?;
+            // Anything before 2001 in milliseconds is a count of seconds.
+            Some(if x < 1e12 { (x * 1000.0) as i64 } else { x as i64 })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

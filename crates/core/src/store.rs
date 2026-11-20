@@ -3,7 +3,9 @@
 //! never parsed twice.
 
 use crate::model::{Harness, Origin, Session, Summary};
-use crate::sources::{antigravity, claude_code, codex, cursor, opencode, pi, t3code};
+use crate::sources::{
+    amp, antigravity, claude_code, codex, copilot, cursor, fx, grok, hermes, opencode, paseo, pi, t3code, vscode,
+};
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -298,7 +300,12 @@ impl Store {
             .into_iter()
             .map(|p| (Harness::ClaudeCode, p))
             .chain(codex::files().into_iter().map(|p| (Harness::Codex, p)))
-            .chain(pi::files().into_iter().map(|p| (Harness::Pi, p)));
+            .chain(pi::files().into_iter().map(|p| (Harness::Pi, p)))
+            .chain(fx::files().into_iter().map(|p| (Harness::Fx, p)))
+            .chain(grok::files().into_iter().map(|p| (Harness::Grok, p)))
+            .chain(copilot::files().into_iter().map(|p| (Harness::Copilot, p)))
+            .chain(vscode::files().into_iter().map(|p| (Harness::CopilotChat, p)))
+            .chain(amp::files().into_iter().map(|p| (Harness::Amp, p)));
         for (harness, path) in listed {
             let Some(stamp) = stamp_of(&path) else {
                 continue;
@@ -351,12 +358,17 @@ impl Store {
             },
             None => None,
         };
-        let started_elsewhere = t3code::bindings();
+        // Apps that run other harnesses and say which sessions they started.
+        let started_elsewhere: Vec<(Origin, t3code::Binding)> = t3code::bindings()
+            .into_iter()
+            .map(|binding| (Origin::T3Code, binding))
+            .chain(paseo::bindings().into_iter().map(|binding| (Origin::Paseo, binding)))
+            .collect();
         // Sources small enough to read whole every time, each replacing what
         // the index held for it.
         let mut scanned: Vec<(Harness, Vec<Session>)> = Vec::new();
-        let scanners: [(Harness, fn() -> Result<Vec<Session>>); 1] =
-            [(Harness::Antigravity, antigravity::scan)];
+        let scanners: [(Harness, fn() -> Result<Vec<Session>>); 2] =
+            [(Harness::Antigravity, antigravity::scan), (Harness::Hermes, hermes::scan)];
         for (harness, scan) in scanners {
             match scan() {
                 Ok(sessions) => scanned.push((harness, sessions)),
@@ -462,8 +474,8 @@ impl Store {
             let mut mark = tx.prepare(
                 "update sessions set via = ?1, via_title = ?2 where id = ?3 and parent is null",
             )?;
-            for binding in &started_elsewhere {
-                mark.execute(params![Origin::T3Code.slug(), binding.title, binding.native_id])?;
+            for (origin, binding) in &started_elsewhere {
+                mark.execute(params![origin.slug(), binding.title, binding.native_id])?;
             }
         }
         tx.commit()?;
@@ -744,6 +756,11 @@ fn parse_all(todo: &[(Harness, PathBuf, Stamp)], names: &HashMap<String, String>
                     Harness::ClaudeCode => claude_code::parse(path),
                     Harness::Codex => codex::parse(path, names),
                     Harness::Pi => pi::parse(path),
+                    Harness::Fx => fx::parse(path),
+                    Harness::Grok => grok::parse(path),
+                    Harness::Copilot => copilot::parse(path),
+                    Harness::CopilotChat => vscode::parse(path),
+                    Harness::Amp => amp::parse(path),
                     // Database-backed; read whole by their own `scan`.
                     _ => Ok(None),
                 };

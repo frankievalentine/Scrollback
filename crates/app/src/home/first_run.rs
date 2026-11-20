@@ -47,6 +47,12 @@ impl Home {
             place: shown(&sources::t3code::root().join("userdata")),
             sessions: self.sessions.iter().filter(|s| s.origin == Origin::T3Code).count(),
         });
+        found.push(Found {
+            origin: Origin::Paseo,
+            present: sources::paseo::present(),
+            place: shown(&sources::paseo::root()),
+            sessions: self.sessions.iter().filter(|s| s.origin == Origin::Paseo).count(),
+        });
         found
     }
 

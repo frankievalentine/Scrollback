@@ -41,6 +41,12 @@ pub fn events(session: &Session) -> Result<Vec<Event>> {
         Harness::Pi => crate::sources::pi::events(session),
         Harness::Cursor => crate::sources::cursor::events(session),
         Harness::Antigravity => crate::sources::antigravity::events(session),
+        Harness::Fx => crate::sources::fx::events(session),
+        Harness::Grok => crate::sources::grok::events(session),
+        Harness::Hermes => crate::sources::hermes::events(session),
+        Harness::Copilot => crate::sources::copilot::events(session),
+        Harness::CopilotChat => crate::sources::vscode::events(session),
+        Harness::Amp => crate::sources::amp::events(session),
     }
 }
 

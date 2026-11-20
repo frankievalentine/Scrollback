@@ -3,8 +3,9 @@
 Every coding-agent session on your computer in one place, each with a short
 summary of what happened and what was left open.
 
-Scrollback reads the session history that Claude Code, Codex, OpenCode, pi
-and Cursor already keep, indexes it, and writes a summary beside each session,
+Scrollback reads the session history your coding agents already keep
+(Claude Code, Codex, OpenCode, Cursor, GitHub Copilot, Grok, Amp and more),
+indexes it, and writes a summary beside each session,
 so you can find last Tuesday's work by what it was about instead of
 scrolling through transcripts.
 
@@ -22,6 +23,9 @@ scrolling through transcripts.
   summary describes, each folding open to the turns behind it.
 - **One-step resume.** Copy the command that reopens a session in the tool it
   came from.
+- **Find and export.** Find text inside a session (⌘F), or save it as
+  Markdown (⇧⌘E, or `scrollback export`).
+- **Open at login.** Start in the menu bar when you log in.
 - **Activity.** Your week at a glance: time in use each day, which tools you
   used, and the open ends still waiting.
 - **Menu bar popover.** Recent summaries and the week's activity, a click
@@ -38,10 +42,31 @@ scrolling through transcripts.
 | OpenCode | `~/.local/share/opencode` |
 | pi | `~/.pi/agent/sessions` |
 | Cursor | Cursor's own data folder |
-| T3 Code | labels the Claude Code and Codex sessions it started |
+| Antigravity | `~/.gemini/antigravity` and `~/.gemini/antigravity-ide` |
+| fx | `~/.fx/sessions` |
+| Grok Build | `~/.grok/sessions` |
+| Hermes Agent | `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) |
+| GitHub Copilot CLI | `~/.copilot/session-state` |
+| GitHub Copilot in VS Code | VS Code's user folder, `chatSessions` |
+| Amp | `~/.local/share/amp/threads` |
+| T3 Code, Paseo | label the sessions they started in the tools above |
 
 Each folder can be changed in Settings → Sources, and any source can be
-hidden there.
+hidden there. Folders also follow each tool's own setting where it has one,
+such as `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `FX_HOME`, `GROK_HOME`,
+`HERMES_HOME` or `COPILOT_HOME`.
+
+A few notes:
+
+- **Antigravity** encrypts its conversations. Scrollback shows each one from
+  what Antigravity leaves readable: its title, folder and times, the agent's
+  latest message, and the task list, plan and walkthrough it wrote.
+- **Amp** keeps threads on its servers. Only threads the Amp CLI or an editor
+  extension has kept a local copy of appear.
+- **Orca** runs other agents' command-line tools and keeps no conversations
+  of its own, so its sessions appear under the tool that ran them.
+- fx, Grok, Hermes, Copilot and Amp are read from their documented formats
+  and have had less real-world use than the others.
 
 ## Getting started
 
@@ -112,6 +137,7 @@ scrollback list                  # recent sessions
 scrollback search token refresh  # fuzzy search
 scrollback show runyard redesign # a session's summary
 scrollback summarize -n 10       # summarise the ten newest without one
+scrollback export runyard -o runyard.md  # a session as Markdown
 scrollback --help                # everything else
 ```
 

@@ -815,14 +815,14 @@ impl Home {
                     .child("Activity"),
             );
 
-        // One row for each program sessions were run from. The command-line
-        // harnesses are always listed; apps are listed once they have
-        // sessions, so the list stays short as more are supported.
+        // One row for each program sessions were run from. The first
+        // command-line harnesses are always listed; the rest are listed once
+        // they have sessions, so the list stays short as more are supported.
         let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Source", t)));
         for origin in Origin::ALL {
             let count = self.sessions.iter().filter(|s| s.origin == origin).count();
             let active = self.origin == Some(origin);
-            if origin.is_app() && count == 0 && !active {
+            if !origin.always_listed() && count == 0 && !active {
                 continue;
             }
             harnesses = harnesses.child(
@@ -1446,7 +1446,9 @@ impl Home {
                     } else {
                         match session.harness {
                             // Cursor has no way to reopen one conversation.
-                            Harness::Cursor | Harness::Antigravity => "Copy open command",
+                            Harness::Cursor | Harness::Antigravity | Harness::CopilotChat => {
+                                "Copy open command"
+                            }
                             _ => "Copy resume command",
                         }
                     }),
@@ -2022,6 +2024,15 @@ fn resume_for(session: &Session, powershell: bool) -> String {
         Harness::Cursor => return format!("cursor {dir}"),
         // Nor can Antigravity's, from outside it.
         Harness::Antigravity => return format!("antigravity {dir}"),
+        // fx resumes from a picker of this folder's sessions.
+        Harness::Fx => "fx -r".to_string(),
+        Harness::Grok => format!("grok --resume {}", session.id),
+        Harness::Hermes => format!("hermes --resume {}", session.id),
+        // The Copilot CLI resumes from a picker.
+        Harness::Copilot => "copilot --resume".to_string(),
+        // A Copilot chat reopens from VS Code's chat history.
+        Harness::CopilotChat => return format!("code {dir}"),
+        Harness::Amp => format!("amp threads continue {}", session.id),
     };
     // Windows PowerShell, the one that ships with Windows, has no `&&`.
     let then = if powershell { ";" } else { " &&" };
