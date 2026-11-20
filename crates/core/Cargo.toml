@@ -11,3 +11,4 @@ serde_json.workspace = true
 rusqlite.workspace = true
 chrono.workspace = true
 nucleo-matcher.workspace = true
+base64 = "0.22"

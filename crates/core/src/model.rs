@@ -55,15 +55,17 @@ pub enum Harness {
     OpenCode,
     Pi,
     Cursor,
+    Antigravity,
 }
 
 impl Harness {
-    pub const ALL: [Harness; 5] = [
+    pub const ALL: [Harness; 6] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::OpenCode,
         Harness::Pi,
         Harness::Cursor,
+        Harness::Antigravity,
     ];
 
     /// Stable identifier used in the index and in session keys.
@@ -74,6 +76,7 @@ impl Harness {
             Harness::OpenCode => "opencode",
             Harness::Pi => "pi",
             Harness::Cursor => "cursor",
+            Harness::Antigravity => "antigravity",
         }
     }
 
@@ -84,6 +87,7 @@ impl Harness {
             Harness::OpenCode => "OpenCode",
             Harness::Pi => "pi",
             Harness::Cursor => "Cursor",
+            Harness::Antigravity => "Antigravity",
         }
     }
 
@@ -100,6 +104,7 @@ impl Harness {
             Harness::OpenCode => Origin::OpenCode,
             Harness::Pi => Origin::Pi,
             Harness::Cursor => Origin::Cursor,
+            Harness::Antigravity => Origin::Antigravity,
         }
     }
 }
@@ -118,11 +123,12 @@ pub enum Origin {
     OpenCode,
     Pi,
     Cursor,
+    Antigravity,
     T3Code,
 }
 
 impl Origin {
-    pub const ALL: [Origin; 8] = [
+    pub const ALL: [Origin; 9] = [
         Origin::ClaudeCode,
         Origin::ClaudeDesktop,
         Origin::Codex,
@@ -130,6 +136,7 @@ impl Origin {
         Origin::OpenCode,
         Origin::Pi,
         Origin::Cursor,
+        Origin::Antigravity,
         Origin::T3Code,
     ];
 
@@ -143,6 +150,7 @@ impl Origin {
             Origin::OpenCode => "opencode",
             Origin::Pi => "pi",
             Origin::Cursor => "cursor",
+            Origin::Antigravity => "antigravity",
             Origin::T3Code => "t3-code",
         }
     }
@@ -158,6 +166,7 @@ impl Origin {
             Origin::OpenCode => "OpenCode",
             Origin::Pi => "pi",
             Origin::Cursor => "Cursor",
+            Origin::Antigravity => "Antigravity",
             Origin::T3Code => "T3 Code",
         }
     }
@@ -171,7 +180,11 @@ impl Origin {
     pub fn is_app(self) -> bool {
         matches!(
             self,
-            Origin::ClaudeDesktop | Origin::CodexDesktop | Origin::Cursor | Origin::T3Code
+            Origin::ClaudeDesktop
+                | Origin::CodexDesktop
+                | Origin::Cursor
+                | Origin::Antigravity
+                | Origin::T3Code
         )
     }
 }

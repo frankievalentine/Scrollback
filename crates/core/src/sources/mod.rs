@@ -2,6 +2,7 @@
 //! `parse(path)`, so the indexer can skip files that have not changed.
 //! Database-backed harnesses expose `scan()`.
 
+pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod cursor;
@@ -30,6 +31,7 @@ pub fn default_folder(harness: Harness) -> PathBuf {
             .unwrap_or_else(|| home.join(".pi").join("agent"))
             .join("sessions"),
         Harness::Cursor => crate::app_support().join("Cursor").join("User"),
+        Harness::Antigravity => home.join(".gemini").join("antigravity"),
     }
 }
 

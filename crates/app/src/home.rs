@@ -1446,7 +1446,7 @@ impl Home {
                     } else {
                         match session.harness {
                             // Cursor has no way to reopen one conversation.
-                            Harness::Cursor => "Copy open command",
+                            Harness::Cursor | Harness::Antigravity => "Copy open command",
                             _ => "Copy resume command",
                         }
                     }),
@@ -1845,7 +1845,7 @@ fn trailing(text: impl Into<SharedString>, t: &Theme) -> Div {
         .child(text.into())
 }
 
-pub(crate) fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
+pub(crate) fn logo(origin: Origin, t: &Theme, size: f32) -> AnyElement {
     let (path, color): (&'static str, Hsla) = match origin {
         Origin::ClaudeCode => ("claude-code.svg", claude_orange()),
         Origin::ClaudeDesktop => ("claude.svg", claude_orange()),
@@ -1855,12 +1855,34 @@ pub(crate) fn logo(origin: Origin, t: &Theme, size: f32) -> impl IntoElement {
         Origin::Pi => ("pi.svg", t.ink),
         Origin::Cursor => ("cursor.svg", t.ink),
         Origin::T3Code => ("t3.svg", t.ink),
+        // Sources without a drawn mark get their initial in a small tile.
+        other => return initial(other.name(), t, size).into_any_element(),
     };
     svg()
         .path(path)
         .size(px(size))
         .flex_shrink_0()
         .text_color(color)
+        .into_any_element()
+}
+
+/// A source's initial in a rounded tile, the size of a logo.
+fn initial(name: &str, t: &Theme, size: f32) -> Div {
+    let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(size * 0.28))
+        .bg(t.ink)
+        .text_color(t.bg)
+        .font_family(UI_FONT)
+        .font_weight(FontWeight::BOLD)
+        .text_size(px(size * 0.72))
+        .line_height(px(size))
+        .child(letter)
 }
 
 /// The line of small facts under a session: harness, project, branch, time.
@@ -1998,6 +2020,8 @@ fn resume_for(session: &Session, powershell: bool) -> String {
         Harness::Pi => format!("pi --session {}", quoted(&session.source)),
         // Cursor conversations cannot be reopened by id; open the project.
         Harness::Cursor => return format!("cursor {dir}"),
+        // Nor can Antigravity's, from outside it.
+        Harness::Antigravity => return format!("antigravity {dir}"),
     };
     // Windows PowerShell, the one that ships with Windows, has no `&&`.
     let then = if powershell { ";" } else { " &&" };

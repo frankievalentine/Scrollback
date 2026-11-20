@@ -3,7 +3,7 @@
 //! never parsed twice.
 
 use crate::model::{Harness, Origin, Session, Summary};
-use crate::sources::{claude_code, codex, cursor, opencode, pi, t3code};
+use crate::sources::{antigravity, claude_code, codex, cursor, opencode, pi, t3code};
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -352,6 +352,17 @@ impl Store {
             None => None,
         };
         let started_elsewhere = t3code::bindings();
+        // Sources small enough to read whole every time, each replacing what
+        // the index held for it.
+        let mut scanned: Vec<(Harness, Vec<Session>)> = Vec::new();
+        let scanners: [(Harness, fn() -> Result<Vec<Session>>); 1] =
+            [(Harness::Antigravity, antigravity::scan)];
+        for (harness, scan) in scanners {
+            match scan() {
+                Ok(sessions) => scanned.push((harness, sessions)),
+                Err(err) => report.warnings.push(format!("{}: {err:#}", harness.name())),
+            }
+        }
 
         // Write everything in one transaction.
         let tx = self.db.transaction()?;
@@ -425,6 +436,21 @@ impl Store {
                     tx.execute("delete from sessions where key = ?1", [key])?;
                 }
                 set_stamp.execute(params![cursor_key, stamp.mtime_ms, stamp.size])?;
+            }
+
+            for (harness, sessions) in &scanned {
+                let keep: HashSet<String> = sessions.iter().map(Session::key).collect();
+                for session in sessions {
+                    upsert.execute(rusqlite::params_from_iter(row_params(session)))?;
+                }
+                let stale: Vec<String> = existing
+                    .query_map([harness.slug()], |row| row.get::<_, String>(0))?
+                    .filter_map(Result::ok)
+                    .filter(|key| !keep.contains(key))
+                    .collect();
+                for key in stale {
+                    tx.execute("delete from sessions where key = ?1", [key])?;
+                }
             }
 
             // Sessions another app says it started. Worked out afresh each
@@ -719,7 +745,7 @@ fn parse_all(todo: &[(Harness, PathBuf, Stamp)], names: &HashMap<String, String>
                     Harness::Codex => codex::parse(path, names),
                     Harness::Pi => pi::parse(path),
                     // Database-backed; read whole by their own `scan`.
-                    Harness::OpenCode | Harness::Cursor => Ok(None),
+                    _ => Ok(None),
                 };
                 out.lock().unwrap().push((path.clone(), *stamp, outcome));
             });

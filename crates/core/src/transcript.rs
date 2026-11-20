@@ -40,6 +40,7 @@ pub fn events(session: &Session) -> Result<Vec<Event>> {
         Harness::OpenCode => opencode(session),
         Harness::Pi => crate::sources::pi::events(session),
         Harness::Cursor => crate::sources::cursor::events(session),
+        Harness::Antigravity => crate::sources::antigravity::events(session),
     }
 }
 
