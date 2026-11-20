@@ -68,7 +68,35 @@ pub fn data_dir() -> PathBuf {
     } else {
         xdg_data()
     };
-    parent.join("scrollback")
+    // Named like the app on macOS and Windows. Linux keeps its data folders
+    // in lower case, as the tools beside it in ~/.local/share do.
+    let name = if cfg!(target_os = "linux") { "scrollback" } else { "Scrollback" };
+    static SETTLED: std::sync::Once = std::sync::Once::new();
+    SETTLED.call_once(|| settle_name(&parent, name));
+    parent.join(name)
+}
+
+/// Bring a folder left under an older spelling of `name` (such as
+/// `scrollback` before the app was named `Scrollback`) to the current one.
+/// The disks of macOS and Windows usually ignore case, so the folder is
+/// moved through a temporary name. A folder already under the current
+/// name is left as it is.
+fn settle_name(parent: &std::path::Path, name: &str) {
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    let names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|entry| entry.eq_ignore_ascii_case(name))
+        .collect();
+    if names.iter().any(|entry| entry == name) {
+        return;
+    }
+    let Some(old) = names.first() else { return };
+    let moving = parent.join(format!(".{name}-moving"));
+    if std::fs::rename(parent.join(old), &moving).is_ok() && std::fs::rename(&moving, parent.join(name)).is_err() {
+        // Put it back rather than leave it under the temporary name.
+        let _ = std::fs::rename(&moving, parent.join(old));
+    }
 }
 
 /// The parts of a path between its separators. Sessions carry paths as the
@@ -108,4 +136,28 @@ pub fn parse_ts(ts: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .ok()
         .map(|d| d.timestamp_millis())
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn an_older_spelling_is_moved_to_the_current_one() {
+        let parent = std::env::temp_dir().join(format!("scrollback-name-{}", std::process::id()));
+        std::fs::create_dir_all(parent.join("scrollback")).unwrap();
+        std::fs::write(parent.join("scrollback").join("index.db"), "x").unwrap();
+        settle_name(&parent, "Scrollback");
+        let listed: Vec<String> = std::fs::read_dir(&parent)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        assert_eq!(listed, vec!["Scrollback".to_string()]);
+        assert!(parent.join("Scrollback").join("index.db").is_file());
+        // Already right: nothing moves.
+        settle_name(&parent, "Scrollback");
+        assert!(parent.join("Scrollback").join("index.db").is_file());
+        std::fs::remove_dir_all(&parent).ok();
+    }
 }

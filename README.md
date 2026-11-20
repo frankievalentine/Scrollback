@@ -1,7 +1,10 @@
+<img src="crates/app/icon/png/128.png" alt="Scrollback icon" width="96" height="96">
+
 # Scrollback
 
-Every coding-agent session on your computer in one place, each with a short
-summary of what happened and what was left open.
+Your coding-agent sessions in one place, each with a short summary of what
+happened and what was left open, written by Claude Haiku through the Claude
+Code command line you already use.
 
 Scrollback reads the session history your coding agents already keep
 (Claude Code, Codex, OpenCode, Cursor, GitHub Copilot, Grok and more),
@@ -145,7 +148,11 @@ packages install it on your path.
 
 | | macOS | Linux | Windows |
 | --- | --- | --- | --- |
-| Index and settings | `~/Library/Application Support/scrollback` | `~/.local/share/scrollback` | `%LOCALAPPDATA%\scrollback` |
+| Index and settings | `~/Library/Application Support/Scrollback` | `~/.local/share/scrollback` | `%LOCALAPPDATA%\Scrollback` |
+
+The Linux folder is lower case, like the other tools in `~/.local/share`. A
+folder left from an older version under a different spelling is renamed the
+first time Scrollback starts.
 
 Deleting that folder resets Scrollback; it rebuilds the index on its next
 start and writes the summaries again.
