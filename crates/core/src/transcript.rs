@@ -46,7 +46,6 @@ pub fn events(session: &Session) -> Result<Vec<Event>> {
         Harness::Hermes => crate::sources::hermes::events(session),
         Harness::Copilot => crate::sources::copilot::events(session),
         Harness::CopilotChat => crate::sources::vscode::events(session),
-        Harness::Amp => crate::sources::amp::events(session),
     }
 }
 

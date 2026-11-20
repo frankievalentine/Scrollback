@@ -4,7 +4,7 @@ Every coding-agent session on your computer in one place, each with a short
 summary of what happened and what was left open.
 
 Scrollback reads the session history your coding agents already keep
-(Claude Code, Codex, OpenCode, Cursor, GitHub Copilot, Grok, Amp and more),
+(Claude Code, Codex, OpenCode, Cursor, GitHub Copilot, Grok and more),
 indexes it, and writes a summary beside each session,
 so you can find last Tuesday's work by what it was about instead of
 scrolling through transcripts.
@@ -48,7 +48,6 @@ scrolling through transcripts.
 | Hermes Agent | `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) |
 | GitHub Copilot CLI | `~/.copilot/session-state` |
 | GitHub Copilot in VS Code | VS Code's user folder, `chatSessions` |
-| Amp | `~/.local/share/amp/threads` |
 | T3 Code, Paseo | label the sessions they started in the tools above |
 
 Each folder can be changed in Settings → Sources, and any source can be
@@ -61,11 +60,9 @@ A few notes:
 - **Antigravity** encrypts its conversations. Scrollback shows each one from
   what Antigravity leaves readable: its title, folder and times, the agent's
   latest message, and the task list, plan and walkthrough it wrote.
-- **Amp** keeps threads on its servers. Only threads the Amp CLI or an editor
-  extension has kept a local copy of appear.
 - **Orca** runs other agents' command-line tools and keeps no conversations
   of its own, so its sessions appear under the tool that ran them.
-- fx, Grok, Hermes, Copilot and Amp are read from their documented formats
+- fx, Grok, Hermes and Copilot are read from their documented formats
   and have had less real-world use than the others.
 
 ## Getting started

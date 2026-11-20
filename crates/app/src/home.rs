@@ -2032,7 +2032,6 @@ fn resume_for(session: &Session, powershell: bool) -> String {
         Harness::Copilot => "copilot --resume".to_string(),
         // A Copilot chat reopens from VS Code's chat history.
         Harness::CopilotChat => return format!("code {dir}"),
-        Harness::Amp => format!("amp threads continue {}", session.id),
     };
     // Windows PowerShell, the one that ships with Windows, has no `&&`.
     let then = if powershell { ";" } else { " &&" };

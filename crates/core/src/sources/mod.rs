@@ -2,7 +2,6 @@
 //! `parse(path)`, so the indexer can skip files that have not changed.
 //! Database-backed harnesses expose `scan()`.
 
-pub mod amp;
 pub mod antigravity;
 pub mod claude_code;
 pub mod copilot;
@@ -51,7 +50,6 @@ pub fn default_folder(harness: Harness) -> PathBuf {
         }),
         Harness::Copilot => or_home("COPILOT_HOME", ".copilot"),
         Harness::CopilotChat => crate::app_support().join("Code").join("User"),
-        Harness::Amp => crate::xdg_data().join("amp"),
     }
 }
 

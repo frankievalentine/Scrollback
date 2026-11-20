@@ -61,11 +61,10 @@ pub enum Harness {
     Hermes,
     Copilot,
     CopilotChat,
-    Amp,
 }
 
 impl Harness {
-    pub const ALL: [Harness; 12] = [
+    pub const ALL: [Harness; 11] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::OpenCode,
@@ -77,7 +76,6 @@ impl Harness {
         Harness::Hermes,
         Harness::Copilot,
         Harness::CopilotChat,
-        Harness::Amp,
     ];
 
     /// Stable identifier used in the index and in session keys.
@@ -94,7 +92,6 @@ impl Harness {
             Harness::Hermes => "hermes",
             Harness::Copilot => "copilot",
             Harness::CopilotChat => "copilot-chat",
-            Harness::Amp => "amp",
         }
     }
 
@@ -111,7 +108,6 @@ impl Harness {
             Harness::Hermes => "Hermes",
             Harness::Copilot => "Copilot CLI",
             Harness::CopilotChat => "Copilot",
-            Harness::Amp => "Amp",
         }
     }
 
@@ -134,7 +130,6 @@ impl Harness {
             Harness::Hermes => Origin::Hermes,
             Harness::Copilot => Origin::Copilot,
             Harness::CopilotChat => Origin::CopilotChat,
-            Harness::Amp => Origin::Amp,
         }
     }
 }
@@ -159,13 +154,12 @@ pub enum Origin {
     Hermes,
     Copilot,
     CopilotChat,
-    Amp,
     T3Code,
     Paseo,
 }
 
 impl Origin {
-    pub const ALL: [Origin; 16] = [
+    pub const ALL: [Origin; 15] = [
         Origin::ClaudeCode,
         Origin::ClaudeDesktop,
         Origin::Codex,
@@ -179,7 +173,6 @@ impl Origin {
         Origin::Hermes,
         Origin::Copilot,
         Origin::CopilotChat,
-        Origin::Amp,
         Origin::T3Code,
         Origin::Paseo,
     ];
@@ -200,7 +193,6 @@ impl Origin {
             Origin::Hermes => "hermes",
             Origin::Copilot => "copilot",
             Origin::CopilotChat => "copilot-chat",
-            Origin::Amp => "amp",
             Origin::T3Code => "t3-code",
             Origin::Paseo => "paseo",
         }
@@ -223,7 +215,6 @@ impl Origin {
             Origin::Hermes => "Hermes",
             Origin::Copilot => "Copilot CLI",
             Origin::CopilotChat => "Copilot",
-            Origin::Amp => "Amp",
             Origin::T3Code => "T3 Code",
             Origin::Paseo => "Paseo",
         }

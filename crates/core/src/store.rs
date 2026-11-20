@@ -4,7 +4,7 @@
 
 use crate::model::{Harness, Origin, Session, Summary};
 use crate::sources::{
-    amp, antigravity, claude_code, codex, copilot, cursor, fx, grok, hermes, opencode, paseo, pi, t3code, vscode,
+    antigravity, claude_code, codex, copilot, cursor, fx, grok, hermes, opencode, paseo, pi, t3code, vscode,
 };
 use crate::transcript::{self, Block};
 use anyhow::{Context, Result};
@@ -304,8 +304,7 @@ impl Store {
             .chain(fx::files().into_iter().map(|p| (Harness::Fx, p)))
             .chain(grok::files().into_iter().map(|p| (Harness::Grok, p)))
             .chain(copilot::files().into_iter().map(|p| (Harness::Copilot, p)))
-            .chain(vscode::files().into_iter().map(|p| (Harness::CopilotChat, p)))
-            .chain(amp::files().into_iter().map(|p| (Harness::Amp, p)));
+            .chain(vscode::files().into_iter().map(|p| (Harness::CopilotChat, p)));
         for (harness, path) in listed {
             let Some(stamp) = stamp_of(&path) else {
                 continue;
@@ -760,7 +759,6 @@ fn parse_all(todo: &[(Harness, PathBuf, Stamp)], names: &HashMap<String, String>
                     Harness::Grok => grok::parse(path),
                     Harness::Copilot => copilot::parse(path),
                     Harness::CopilotChat => vscode::parse(path),
-                    Harness::Amp => amp::parse(path),
                     // Database-backed; read whole by their own `scan`.
                     _ => Ok(None),
                 };
