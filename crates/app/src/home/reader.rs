@@ -5,7 +5,7 @@
 
 use super::{facts, outcome_mark, Home};
 use crate::markdown;
-use crate::theme::{text, Theme, MONO_FONT};
+use crate::theme::{text, Theme, mono};
 use crate::ui::{OneLine, Reachable};
 use gpui::{
     div, list, prelude::*, px, AnyElement, Context, Div, FontWeight, ListAlignment, ListOffset,
@@ -408,7 +408,7 @@ impl Home {
                         )
                         .child(
                             div()
-                                .font_family(MONO_FONT)
+                                .font_family(mono())
                                 .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
                                 .child(keys),
@@ -526,7 +526,7 @@ impl Home {
                             .w(px(44.))
                             .flex_shrink_0()
                             .pt(px(2.))
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if open { t.ink } else { t.ink3 })
@@ -552,7 +552,7 @@ impl Home {
                             )
                             .child(
                                 div()
-                                    .font_family(MONO_FONT)
+                                    .font_family(mono())
                                     .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(about),
@@ -610,7 +610,7 @@ impl Home {
                         .rounded(px(7.))
                         .border_1()
                         .border_color(t.line)
-                        .font_family(MONO_FONT)
+                        .font_family(mono())
                         .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
                         .cursor_pointer()
@@ -630,7 +630,7 @@ impl Home {
                         .rounded(px(9.))
                         .border_1()
                         .border_color(t.line)
-                        .font_family(MONO_FONT)
+                        .font_family(mono())
                         .text_size(px(text::CAPTION))
                         .line_height(px(18.));
                     for (name, target) in calls {
@@ -689,7 +689,7 @@ fn turn(role: &'static str, content: impl IntoElement, t: &Theme) -> Div {
                 .w(px(44.))
                 .flex_shrink_0()
                 .pt(px(2.))
-                .font_family(MONO_FONT)
+                .font_family(mono())
                 .text_size(px(text::CAPTION))
                 .text_color(t.ink3)
                 .child(role),

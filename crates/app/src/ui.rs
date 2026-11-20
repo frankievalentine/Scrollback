@@ -2,7 +2,7 @@
 //! that shows when a list has more below, tooltips, and shortening long
 //! paths so the end stays readable.
 
-use crate::theme::{text, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, Theme, mono, UI_FONT};
 use gpui::{
     div, point, prelude::*, px, AnyView, App, BoxShadow, Context, Div, InteractiveElement,
     ScrollHandle, SharedString, Styled, Window,
@@ -10,6 +10,41 @@ use gpui::{
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Half a blink of a search caret.
+/// How a shortcut is written for the system the app is running on: `⌘R` on
+/// a Mac, `Ctrl+R` elsewhere.
+pub fn shortcut(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("⌘{key}")
+    } else {
+        format!("Ctrl+{key}")
+    }
+}
+
+/// A shortcut with shift held: `⇧space` on a Mac, `Shift+space` elsewhere.
+pub fn shifted(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("⇧{key}")
+    } else {
+        format!("Shift+{key}")
+    }
+}
+
+/// The title bar of a window. On a Mac the content runs up under a clear
+/// title bar with the window's buttons set into it; elsewhere the system
+/// draws its usual title bar above the content.
+pub fn titlebar(title: &'static str) -> gpui::TitlebarOptions {
+    let mac = cfg!(target_os = "macos");
+    gpui::TitlebarOptions {
+        title: Some(title.into()),
+        appears_transparent: mac,
+        traffic_light_position: mac.then(|| gpui::point(px(16.), px(16.))),
+    }
+}
+
+/// Room left above a window's content: on a Mac, enough to clear the
+/// window's buttons.
+pub const TOP_INSET: f32 = if cfg!(target_os = "macos") { 52. } else { 20. };
+
 pub const CARET_BLINK: std::time::Duration = std::time::Duration::from_millis(530);
 
 /// The caret in a search box. It shows that typing lands there: lit and
@@ -223,7 +258,7 @@ impl Render for Tip {
             .rounded(px(6.))
             .bg(t.ink)
             .text_color(t.bg)
-            .font_family(if self.0.contains('/') { MONO_FONT } else { UI_FONT })
+            .font_family(if self.0.contains(['/', '\\']) { mono() } else { UI_FONT })
             .text_size(px(text::CAPTION))
             .line_height(px(17.))
             .child(self.0.clone())

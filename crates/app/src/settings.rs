@@ -3,11 +3,11 @@
 //! session window follows without being told directly.
 
 use crate::home::{label, logo, nav_row};
-use crate::theme::{text, self, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, self, Theme, mono, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
 use gpui::{
-    div, point, prelude::*, px, size, svg, App, Bounds, Context, Div, FocusHandle, FontWeight,
-    Global, PathPromptOptions, SharedString, Stateful, TitlebarOptions, Window, WindowBounds,
+    div, prelude::*, px, size, svg, App, Bounds, Context, Div, FocusHandle, FontWeight,
+    Global, PathPromptOptions, SharedString, Stateful, Window, WindowBounds,
     WindowHandle, WindowOptions,
 };
 use scrollback_core::{sources, summarize, Config, Harness, Origin, QUIET_MINUTES, SUMMARY_MODELS};
@@ -79,11 +79,7 @@ pub fn open(cx: &mut App, tab: Tab) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(600.), px(420.))),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Settings".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(point(px(16.), px(16.))),
-            }),
+            titlebar: Some(ui::titlebar("Settings")),
             ..Default::default()
         },
         |window, cx| {
@@ -161,6 +157,7 @@ impl SettingsView {
         let in_menu_bar = self.config.menu_bar_icon;
         let quiet = self.config.quiet_minutes;
         let live = self.config.live_summaries;
+        let mac = cfg!(target_os = "macos");
         let mut wait = segmented(t);
         for minutes in QUIET_MINUTES {
             let name = match minutes {
@@ -209,11 +206,16 @@ impl SettingsView {
                     .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.live_summaries = !live))),
                 t,
             ))
-            .child(row("Appearance", "Light, dark, or whatever the Mac is set to.", look, t))
+            .child(row("Appearance", "Light, dark, or whatever the system is set to.", look, t))
             .child(row(
-                "Menu bar icon",
-                "Keep scrollback in the menu bar. It stays running there when its window is \
-                 closed, and a click opens recent sessions.",
+                if mac { "Menu bar icon" } else { "Tray icon" },
+                if mac {
+                    "Keep scrollback in the menu bar. It stays running there when its window \
+                     is closed, and a click opens recent sessions."
+                } else {
+                    "Keep scrollback in the system tray. It stays running there when its \
+                     window is closed, and a click opens recent sessions."
+                },
                 switch("menu-bar-icon", in_menu_bar, t).on_click(
                     cx.listener(move |this, _, _, cx| this.change(cx, |c| c.menu_bar_icon = !in_menu_bar)),
                 ),
@@ -296,7 +298,7 @@ impl SettingsView {
                                     .id(("folder", harness as usize))
                                     .tooltip(ui::tip(folder.display().to_string()))
                                     .one_line()
-                                    .font_family(MONO_FONT)
+                                    .font_family(mono())
                                     .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(format!(
@@ -366,7 +368,7 @@ impl SettingsView {
                     .child(div().font_weight(FontWeight::MEDIUM).child("The claude command"))
                     .child(
                         div()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(tool),
@@ -410,7 +412,7 @@ impl SettingsView {
                             )
                             .child(
                                 div()
-                                    .font_family(MONO_FONT)
+                                    .font_family(mono())
                                     .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(format!("version {}", env!("CARGO_PKG_VERSION"))),
@@ -422,7 +424,7 @@ impl SettingsView {
                     .text_color(t.ink2)
                     .line_height(px(22.))
                     .child(
-                        "Every coding-agent session on this Mac in one place, each with a \
+                        "Every coding-agent session on this computer in one place, each with a \
                          summary of what happened and what was left open.",
                     ),
             )
@@ -437,7 +439,7 @@ impl SettingsView {
                     .child(label("Index", t))
                     .child(
                         div()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(index.display().to_string()),
@@ -463,7 +465,7 @@ impl Render for SettingsView {
             .flex()
             .flex_col()
             .gap(px(2.))
-            .pt(px(52.))
+            .pt(px(ui::TOP_INSET))
             .px(px(10.))
             .bg(t.rail)
             .border_r_1()
@@ -509,7 +511,7 @@ impl Render for SettingsView {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .pt(px(52.))
+                    .pt(px(ui::TOP_INSET))
                     .px(px(32.))
                     .pb(px(32.))
                     .child(

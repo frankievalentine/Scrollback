@@ -6,7 +6,7 @@
 
 use crate::home::{self, clock, covers, day_label, facts, label, outcome_mark, resume_command};
 use crate::open_main;
-use crate::theme::{text, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, Theme, mono, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
 use gpui::{
     div, point, prelude::*, px, size, svg, App, Bounds, ClipboardItem, Context, Div, FocusHandle,
@@ -87,7 +87,9 @@ pub fn window(cx: &App) -> Option<WindowHandle<Popover>> {
     cx.global::<Open>().window
 }
 
-/// Where the popover goes: centred under the icon, kept on its screen.
+/// Where the popover goes: centred on the icon and kept on its screen,
+/// hanging below a bar at the top of the screen and standing above one at
+/// the bottom, as the Windows taskbar and many Linux panels are.
 fn place(icon: Option<tray_icon::Rect>, cx: &App) -> Bounds<Pixels> {
     let fallback = cx.primary_display().map(|display| display.bounds());
     let panel = size(px(WIDTH), px(HEIGHT));
@@ -102,7 +104,8 @@ fn place(icon: Option<tray_icon::Rect>, cx: &App) -> Bounds<Pixels> {
     let scale = if icon.size.height >= 44 { 2. } else { 1. };
     let left = icon.position.x as f32 / scale;
     let middle = left + icon.size.width as f32 / scale / 2.;
-    let bottom = (icon.position.y as f32 + icon.size.height as f32) / scale;
+    let top = icon.position.y as f32 / scale;
+    let bottom = top + icon.size.height as f32 / scale;
     let screen = cx
         .displays()
         .into_iter()
@@ -113,11 +116,17 @@ fn place(icon: Option<tray_icon::Rect>, cx: &App) -> Bounds<Pixels> {
         })
         .or(fallback);
     let mut x = px(middle) - panel.width / 2.;
+    let mut y = px(bottom + 6.);
     if let Some(screen) = screen {
         let most = screen.origin.x + screen.size.width - panel.width - px(8.);
         x = x.min(most).max(screen.origin.x + px(8.));
+        let lowest = screen.origin.y + screen.size.height - panel.height - px(8.);
+        if px(top) > screen.origin.y + screen.size.height / 2. {
+            y = px(top - 6.) - panel.height;
+        }
+        y = y.min(lowest).max(screen.origin.y + px(8.));
     }
-    Bounds { origin: point(x, px(bottom + 6.)), size: panel }
+    Bounds { origin: point(x, y), size: panel }
 }
 
 /// One line of the list.
@@ -372,8 +381,8 @@ impl Popover {
             "down" => self.select(self.selected + 1, cx),
             "up" => self.select(self.selected.saturating_sub(1), cx),
             "enter" => self.copy_resume(cx),
-            "o" if mods.platform => self.open_in_window(window, cx),
-            "c" if mods.platform => self.copy_summary(cx),
+            "o" if mods.secondary() => self.open_in_window(window, cx),
+            "c" if mods.secondary() => self.copy_summary(cx),
             "escape" if self.query.is_empty() => self.close(window, cx),
             "escape" => {
                 self.query.clear();
@@ -381,7 +390,7 @@ impl Popover {
                 cx.notify();
             }
             "backspace" => {
-                if mods.platform || mods.alt {
+                if mods.secondary() || mods.alt {
                     self.query.clear();
                 } else {
                     self.query.pop();
@@ -523,7 +532,7 @@ impl Popover {
                                     .flex()
                                     .items_center()
                                     .gap(px(7.))
-                                    .font_family(MONO_FONT)
+                                    .font_family(mono())
                                     .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(mark)
@@ -615,11 +624,11 @@ impl Popover {
                     .on_click(cx.listener(|this, _, _, cx| this.copy_resume(cx))),
             )
             .child(
-                action("popover-open", "Open in window", "⌘O", false, t)
+                action("popover-open", "Open in window", ui::shortcut("O"), false, t)
                     .on_click(cx.listener(|this, _, window, cx| this.open_in_window(window, cx))),
             )
             .child(
-                action("popover-summary", summary, "⌘C", false, t)
+                action("popover-summary", summary, ui::shortcut("C"), false, t)
                     .on_click(cx.listener(|this, _, _, cx| this.copy_summary(cx))),
             );
 
@@ -692,7 +701,7 @@ impl Render for Popover {
                     .py(px(9.))
                     .border_t_1()
                     .border_color(t.line)
-                    .font_family(MONO_FONT)
+                    .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child("↑↓ move")
@@ -741,11 +750,12 @@ fn listing(title: &'static str, lines: &[String], numbered: bool, t: &Theme) -> 
 fn action(
     id: &'static str,
     name: impl Into<SharedString>,
-    key: &'static str,
+    key: impl Into<SharedString>,
     primary: bool,
     t: &Theme,
 ) -> gpui::Stateful<Div> {
     let fill = t.fill;
+    let key: SharedString = key.into();
     div()
         .id(id)
         .reachable(t)
@@ -765,7 +775,7 @@ fn action(
         .when(!key.is_empty(), |el| {
             el.child(
                 div()
-                    .font_family(MONO_FONT)
+                    .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .when(!primary, |el| el.text_color(t.ink3))
                     .child(key),

@@ -28,6 +28,7 @@ Usage:
 fn main() -> Result<()> {
     // Exit quietly when output is piped into something that stops reading,
     // such as `scrollback list | head`.
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }

@@ -7,7 +7,7 @@ mod reader;
 
 use crate::app_menu::{CopyResume, ReadTranscript, Reindex, ShowActivity, ShowSessions, WriteSummary};
 use crate::settings::{self, Settings, Tab};
-use crate::theme::{text, claude_orange, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, claude_orange, Theme, mono, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
 use reader::Reading;
 use chrono::{DateTime, Local, TimeZone};
@@ -63,7 +63,7 @@ pub fn load() -> (Vec<Session>, SharedString) {
         }
         Err(err) => (
             Vec::new(),
-            format!("Could not read the index: {err:#}. Press ⌘R to try again.").into(),
+            format!("Could not read the index: {err:#}. Press {} to try again.", ui::shortcut("R")).into(),
         ),
     }
 }
@@ -617,9 +617,10 @@ impl Home {
             return;
         }
         // Keys this window acts on stop here, so they are not also offered to
-        // the system's text input. Command shortcuts belong to the menu bar
-        // and arrive as its commands; only command-backspace is handled here.
-        let ours = !event.keystroke.modifiers.platform || event.keystroke.key == "backspace";
+        // the system's text input. Command shortcuts (control ones off the
+        // Mac) belong to the menus and arrive as their commands; only the one
+        // with backspace is handled here.
+        let ours = !event.keystroke.modifiers.secondary() || event.keystroke.key == "backspace";
         if ours {
             cx.stop_propagation();
             self.typed_at = Instant::now();
@@ -637,7 +638,7 @@ impl Home {
                 "enter" => self.copy_resume(cx),
                 "]" => self.move_step(1, cx),
                 "[" => self.move_step(-1, cx),
-                "o" if !mods.platform => self.toggle_current_step(cx),
+                "o" if !mods.secondary() => self.toggle_current_step(cx),
                 _ => {}
             }
             return;
@@ -685,7 +686,7 @@ impl Home {
                 cx.notify();
             }
             "backspace" => {
-                if mods.platform || mods.alt {
+                if mods.secondary() || mods.alt {
                     self.query.clear();
                 } else {
                     self.query.pop();
@@ -803,7 +804,7 @@ impl Home {
             .flex()
             .flex_col()
             .gap(px(22.))
-            .pt(px(52.))
+            .pt(px(ui::TOP_INSET))
             .pb(px(14.))
             .px(px(10.))
             .bg(t.rail)
@@ -845,10 +846,10 @@ impl Home {
                     .child(div().flex_1().child("Settings"))
                     .child(
                         div()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
-                            .child("⌘,"),
+                            .child(ui::shortcut(",")),
                     ),
             )
             .child(
@@ -858,7 +859,7 @@ impl Home {
                     .child(div().flex_1().child("Summarise automatically"))
                     .child(
                         div()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(if self.config.auto_summarize { "on" } else { "off" }),
@@ -867,7 +868,7 @@ impl Home {
             .child(
                 div()
                     .px(px(10.))
-                    .font_family(MONO_FONT)
+                    .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .line_height(px(17.))
                     .text_color(t.ink3)
@@ -882,8 +883,9 @@ impl Home {
             // Say when it resumes by itself and how to try sooner.
             let resumes = Local::now() + chrono::Duration::from_std(until - Instant::now()).unwrap_or_default();
             return Some(format!(
-                "summaries paused until {}: Claude plan limit reached. ⌘R tries again now.",
-                resumes.format("%H:%M")
+                "summaries paused until {}: Claude plan limit reached. {} tries again now.",
+                resumes.format("%H:%M"),
+                ui::shortcut("R")
             ));
         }
         match self.busy.len() {
@@ -953,13 +955,18 @@ impl Home {
         });
         let hint = if searching {
             format!(
-                "{} sessions · {} messages · {:.1?}   ⇧space expand",
+                "{} sessions · {} messages · {:.1?}   {} expand",
                 self.hits.len(),
                 self.message_hits.len(),
-                self.search_time
+                self.search_time,
+                ui::shifted("space")
             )
         } else {
-            "↑↓ move   → read   ↵ copy resume   ⌘S summarise   ⌘2 activity".to_string()
+            format!(
+                "↑↓ move   → read   ↵ copy resume   {} summarise   {} activity",
+                ui::shortcut("S"),
+                ui::shortcut("2")
+            )
         };
         div().w_full().flex().justify_center().child(
             div()
@@ -982,7 +989,7 @@ impl Home {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .font_family(MONO_FONT)
+                                .font_family(mono())
                                 .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
                                 .child(hint),
@@ -1164,7 +1171,7 @@ impl Home {
                     .w(px(44.))
                     .flex_shrink_0()
                     .pt(px(2.))
-                    .font_family(MONO_FONT)
+                    .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child(if hit.from_user { "you" } else { "agent" }),
@@ -1208,7 +1215,7 @@ impl Home {
                     .w(px(44.))
                     .flex_shrink_0()
                     .pt(px(2.))
-                    .font_family(MONO_FONT)
+                    .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .child(clock(session.updated_ms)),
@@ -1265,7 +1272,7 @@ impl Home {
             .flex_wrap()
             .gap_x(px(18.))
             .gap_y(px(4.))
-            .font_family(MONO_FONT)
+            .font_family(mono())
             .text_size(px(text::CAPTION))
             .text_color(t.ink3)
             .child(format!("{} prompts", session.user_turns))
@@ -1360,7 +1367,7 @@ impl Home {
                         .flex()
                         .flex_col()
                         .gap(px(3.))
-                        .font_family(MONO_FONT)
+                        .font_family(mono())
                         .text_size(px(text::CAPTION))
                         .text_color(t.ink2);
                     for file in &summary.files[..shown] {
@@ -1505,7 +1512,7 @@ impl Home {
             .child(stats)
             .child(
                 div()
-                    .font_family(MONO_FONT)
+                    .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
                     .id("card-folder")
@@ -1539,7 +1546,7 @@ impl Home {
                         .w(px(44.))
                         .flex_shrink_0()
                         .pt(px(1.))
-                        .font_family(MONO_FONT)
+                        .font_family(mono())
                         .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
                         .child(clock(session.updated_ms)),
@@ -1577,7 +1584,7 @@ impl Render for Home {
         let feed: AnyElement = if self.rows.is_empty() {
             let filtered = self.filter_words();
             let message = if self.sessions.is_empty() {
-                "No sessions found on this Mac yet.".to_string()
+                "No sessions found on this computer yet.".to_string()
             } else {
                 match (&filtered, self.query.trim().is_empty()) {
                     (Some(words), true) => format!("No sessions in {words}."),
@@ -1762,7 +1769,7 @@ pub(crate) fn nav_row(t: &Theme, active: bool) -> Div {
 fn count_badge(count: usize, t: &Theme) -> Div {
     div()
         .flex_shrink_0()
-        .font_family(MONO_FONT)
+        .font_family(mono())
         .text_size(px(text::CAPTION))
         .text_color(t.ink3)
         .child(count.to_string())
@@ -1792,7 +1799,7 @@ pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
         .flex()
         .items_center()
         .gap(px(10.))
-        .font_family(MONO_FONT)
+        .font_family(mono())
         .text_size(px(text::CAPTION))
         .text_color(t.ink3)
         .child(logo(session.origin, t, 14.))
@@ -1898,21 +1905,49 @@ fn compact_number(n: u64) -> String {
     }
 }
 
-/// A shell command that reopens the session in its own harness.
+/// A shell command that reopens the session in its own harness, written
+/// for the shell most people have: PowerShell on Windows, a Unix shell
+/// elsewhere.
 pub(crate) fn resume_command(session: &Session) -> String {
-    let dir = format!("'{}'", session.cwd.replace('\'', "'\\''"));
+    resume_for(session, cfg!(windows))
+}
+
+fn resume_for(session: &Session, powershell: bool) -> String {
+    // Both shells take a single-quoted string literally; they differ in how
+    // a quote inside it is written, and in how two commands are joined.
+    let quoted = |text: &str| match powershell {
+        true => format!("'{}'", text.replace('\'', "''")),
+        false => format!("'{}'", text.replace('\'', "'\\''")),
+    };
+    let dir = quoted(&session.cwd);
     let resume = match session.harness {
         Harness::ClaudeCode => format!("claude --resume {}", session.id),
         Harness::Codex => format!("codex resume {}", session.id),
         Harness::OpenCode => format!("opencode --session {}", session.id),
         // pi takes the session file itself, which every version accepts.
-        Harness::Pi => format!("pi --session '{}'", session.source.replace('\'', "'\\''")),
+        Harness::Pi => format!("pi --session {}", quoted(&session.source)),
         // Cursor conversations cannot be reopened by id; open the project.
         Harness::Cursor => return format!("cursor {dir}"),
     };
-    format!("cd {dir} && {resume}")
+    // Windows PowerShell, the one that ships with Windows, has no `&&`.
+    let then = if powershell { ";" } else { " &&" };
+    format!("cd {dir}{then} {resume}")
 }
 
 // `App` is only named in signatures GPUI infers; keep the import honest.
 #[allow(dead_code)]
 fn _uses(_: &App) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_resume_command_suits_the_shell() {
+        let mut session = Session::new(Harness::ClaudeCode, "abc", "a.jsonl");
+        session.cwd = "/Users/me/it's here".into();
+        assert_eq!(resume_for(&session, false), r"cd '/Users/me/it'\''s here' && claude --resume abc");
+        session.cwd = r"C:\Users\me\it's here".into();
+        assert_eq!(resume_for(&session, true), r"cd 'C:\Users\me\it''s here'; claude --resume abc");
+    }
+}

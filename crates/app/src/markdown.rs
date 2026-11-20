@@ -2,7 +2,7 @@
 //! parsed into a small tree and drawn with headings, lists, code, tables and
 //! links instead of being shown as raw text.
 
-use crate::theme::{text, Theme, MONO_FONT, UI_FONT};
+use crate::theme::{text, Theme, mono, UI_FONT};
 use gpui::{
     div, prelude::*, px, AnyElement, Div, Font, FontStyle, FontWeight, Hsla, InteractiveText,
     SharedString, StrikethroughStyle, StyledText, TextRun, UnderlineStyle,
@@ -281,7 +281,7 @@ fn column(nodes: &[Node], t: &Theme, color: Hsla, ids: &mut Ids) -> Div {
                 .bg(t.fill.opacity(0.6))
                 .border_1()
                 .border_color(t.line)
-                .font_family(MONO_FONT)
+                .font_family(mono())
                 .text_size(px(text::CAPTION))
                 .line_height(px(18.))
                 .text_color(t.ink)
@@ -356,7 +356,7 @@ fn rich(text: &Inline, t: &Theme, color: Hsla, weight: FontWeight, ids: &mut Ids
         runs.push(TextRun {
             len: span.len,
             font: Font {
-                family: if span.code { MONO_FONT } else { UI_FONT }.into(),
+                family: if span.code { mono() } else { UI_FONT }.into(),
                 features: Default::default(),
                 fallbacks: None,
                 weight: if span.bold { FontWeight::BOLD } else { weight },

@@ -1,3 +1,7 @@
+// A windowed app on Windows opens a console beside itself unless told not
+// to. Development builds keep it, for the messages printed there.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app_menu;
 mod background;
 mod home;
@@ -9,8 +13,8 @@ mod tray;
 mod ui;
 
 use gpui::{
-    point, prelude::*, px, size, App, Application, AssetSource, Bounds, Global, SharedString,
-    TitlebarOptions, WindowBounds, WindowHandle, WindowOptions,
+    prelude::*, px, size, App, Application, AssetSource, Bounds, Global, SharedString,
+    WindowBounds, WindowHandle, WindowOptions,
 };
 use home::Home;
 use std::borrow::Cow;
@@ -99,11 +103,7 @@ fn open_main_with(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(760.), px(480.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("scrollback".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(16.), px(16.))),
-                }),
+                titlebar: Some(ui::titlebar("scrollback")),
                 ..Default::default()
             },
             |window, cx| {
@@ -132,6 +132,7 @@ fn main() {
         open_main(cx, None);
     });
     app.run(move |cx: &mut App| {
+        theme::choose_fonts(cx);
         settings::install(cx);
         app_menu::install(cx);
         popover::install(cx);

@@ -3,7 +3,7 @@
 //! look. Nothing is summarised until this screen has been answered.
 
 use super::{facts, label, logo, Home};
-use crate::theme::{text, Theme, MONO_FONT};
+use crate::theme::{text, Theme, mono};
 use crate::ui::{self, OneLine, Reachable};
 use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent};
 use scrollback_core::{sources, Harness, Origin};
@@ -84,7 +84,7 @@ impl Home {
         let found = self.found();
         let present = found.iter().filter(|f| f.present).count();
         let heading = match present {
-            0 => "No sessions found on this Mac".to_string(),
+            0 => "No sessions found on this computer".to_string(),
             1 => "Found sessions from 1 source".to_string(),
             n => format!("Found sessions from {n} sources"),
         };
@@ -199,7 +199,7 @@ impl Home {
                             .text_color(t.ink2)
                             .child(
                                 "scrollback reads the session files where they already are \
-                                 and keeps its index on this Mac. It never writes to them.",
+                                 and keeps its index on this computer. It never writes to them.",
                             ),
                     ),
             )
@@ -421,7 +421,7 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
                 .child(
                     div()
                         .one_line()
-                        .font_family(MONO_FONT)
+                        .font_family(mono())
                         .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
                         .child(ui::middle(&f.place, 44)),

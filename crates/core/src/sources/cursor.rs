@@ -1,5 +1,6 @@
 //! Cursor: the editor's agent conversations ("composers"), kept in one SQLite
-//! file at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`.
+//! file at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
+//! on macOS, and under `%APPDATA%` or `~/.config` on Windows and Linux.
 //! It is opened read-only; Cursor may have it open at the same time.
 //!
 //! The file is a key-value table. `composerData:<id>` holds a conversation's
@@ -177,7 +178,8 @@ fn ordered(composer: Composer, mut stored: HashMap<String, Bubble>) -> Vec<Bubbl
         .collect()
 }
 
-/// Turn `file:///Users/me/My%20Project` into a path.
+/// Turn `file:///Users/me/My%20Project` into a path, and
+/// `file:///c%3A/Users/me/project` into `c:\Users\me\project`.
 fn folder_path(uri: &str) -> Option<String> {
     let encoded = uri.strip_prefix("file://")?;
     let bytes = encoded.as_bytes();
@@ -199,7 +201,11 @@ fn folder_path(uri: &str) -> Option<String> {
             }
         }
     }
-    String::from_utf8(out).ok()
+    let path = String::from_utf8(out).ok()?;
+    // Windows folders arrive as `/c:/Users/me/project`.
+    let bytes = path.as_bytes();
+    let drive = bytes.len() > 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':';
+    Some(if drive { path[1..].replace('/', "\\") } else { path })
 }
 
 /// Conversation id to project folder, from each workspace's own state file.
@@ -491,6 +497,7 @@ mod tests {
     fn folder_uris_are_decoded() {
         assert_eq!(folder_path("file:///Users/me/My%20Project").as_deref(), Some("/Users/me/My Project"));
         assert_eq!(folder_path("file:///Users/me/caf%C3%A9").as_deref(), Some("/Users/me/café"));
+        assert_eq!(folder_path("file:///c%3A/Users/me/My%20Project").as_deref(), Some(r"c:\Users\me\My Project"));
         assert_eq!(folder_path("vscode-remote://ssh/x"), None);
     }
 }

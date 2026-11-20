@@ -4,7 +4,7 @@
 
 use super::reader::centered;
 use super::{clock, compact_number, day_label, label, logo, Home, View, LIMIT_PAUSE};
-use crate::theme::{text, Theme, MONO_FONT};
+use crate::theme::{text, Theme, mono};
 use crate::ui::{self, OneLine, Reachable};
 use chrono::Local;
 use gpui::{
@@ -444,7 +444,7 @@ impl Home {
                             .flex_shrink_0()
                             .pt(px(1.))
                             .one_line()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .text_color(t.ink3)
                             .child(end.project.clone()),
@@ -520,7 +520,7 @@ impl Home {
                             .flex_1()
                             .min_w(px(0.))
                             .one_line()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::SMALL))
                             .group_hover("edit", move |style| style.text_color(accent))
                             .child(ui::middle(&format!("{}/{}", edit.project, edit.file), 58)),
@@ -653,7 +653,7 @@ fn by_origin(a: &Activity, t: &Theme) -> Div {
                         .flex_shrink_0()
                         .flex()
                         .justify_end()
-                        .font_family(MONO_FONT)
+                        .font_family(mono())
                         .text_size(px(text::CAPTION))
                         .text_color(t.ink3)
                         .child(format!("{} · {}", share.sessions, hours_label(share.active_ms))),
@@ -699,7 +699,7 @@ fn over_time(a: &Activity, t: &Theme) -> Div {
                 .when(few && bucket.sessions > 0, |el| {
                     el.child(
                         div()
-                            .font_family(MONO_FONT)
+                            .font_family(mono())
                             .text_size(px(text::CAPTION))
                             .line_height(px(14.))
                             .text_color(t.ink3)
@@ -718,7 +718,7 @@ fn over_time(a: &Activity, t: &Theme) -> Div {
 
     let mut axis = div()
         .flex()
-        .font_family(MONO_FONT)
+        .font_family(mono())
         .text_size(px(text::CAPTION))
         .text_color(t.ink3);
     if a.buckets.len() <= 7 {

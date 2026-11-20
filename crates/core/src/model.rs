@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// A pause longer than this between two events is treated as time away.
 pub const IDLE_GAP_MS: i64 = 5 * 60 * 1000;
@@ -271,14 +270,17 @@ impl Session {
     pub fn project(&self) -> &str {
         // A worktree an agent made inside a repository belongs to that
         // repository, not to a project named after the worktree.
-        let repository = ["/.claude/worktrees/", "/.worktrees/"]
-            .iter()
-            .find_map(|marker| self.cwd.find(marker))
-            .map_or(self.cwd.as_str(), |at| &self.cwd[..at]);
-        Path::new(repository)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
+        let parts: Vec<&str> = crate::path_parts(&self.cwd).collect();
+        let worktrees = parts.iter().enumerate().position(|(i, part)| {
+            i > 0
+                && i + 1 < parts.len()
+                && (*part == ".worktrees"
+                    || (*part == ".claude" && parts[i + 1] == "worktrees" && i + 2 < parts.len()))
+        });
+        match worktrees {
+            Some(at) => parts[at - 1],
+            None => parts.last().copied().unwrap_or(""),
+        }
     }
 
     /// How long the session was in use. A session resumed days later counts
@@ -313,7 +315,21 @@ mod tests {
         assert_eq!(s.project(), "runyard");
         s.cwd = "/Users/me/Development/runyard/.claude/worktrees/adoring-mirzakhani-bd3bb0".into();
         assert_eq!(s.project(), "runyard");
+        s.cwd = "/Users/me/Development/runyard/.worktrees/fix-login/apps/web".into();
+        assert_eq!(s.project(), "runyard");
         s.cwd = String::new();
         assert_eq!(s.project(), "");
+    }
+
+    #[test]
+    fn a_windows_folder_names_its_project() {
+        let mut s = Session::new(Harness::ClaudeCode, "s", "test");
+        s.cwd = r"C:\Users\me\dev\runyard".into();
+        assert_eq!(s.project(), "runyard");
+        s.cwd = r"C:\Users\me\dev\runyard\.claude\worktrees\quiet-fox".into();
+        assert_eq!(s.project(), "runyard");
+        // A backslash in a Unix folder name is part of the name.
+        s.cwd = r"/home/me/odd\name".into();
+        assert_eq!(s.project(), r"odd\name");
     }
 }

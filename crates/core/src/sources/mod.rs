@@ -15,17 +15,21 @@ use std::path::{Path, PathBuf};
 /// The folder a harness keeps its sessions in, unless the settings name
 /// another.
 pub fn default_folder(harness: Harness) -> PathBuf {
+    // Each harness uses the same folder under the home folder on every
+    // system, and each has a variable that moves it. Cursor is a desktop
+    // app, so it is wherever the system keeps those.
     let home = crate::home();
+    let or_home = |variable: &str, usual: &str| {
+        crate::env_dir(variable).unwrap_or_else(|| home.join(usual))
+    };
     match harness {
-        Harness::ClaudeCode => home.join(".claude/projects"),
-        Harness::Codex => home.join(".codex"),
-        Harness::OpenCode => home.join(".local/share/opencode"),
-        Harness::Pi => std::env::var_os("PI_CODING_AGENT_DIR")
-            .filter(|dir| !dir.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".pi/agent"))
+        Harness::ClaudeCode => or_home("CLAUDE_CONFIG_DIR", ".claude").join("projects"),
+        Harness::Codex => or_home("CODEX_HOME", ".codex"),
+        Harness::OpenCode => crate::xdg_data().join("opencode"),
+        Harness::Pi => crate::env_dir("PI_CODING_AGENT_DIR")
+            .unwrap_or_else(|| home.join(".pi").join("agent"))
             .join("sessions"),
-        Harness::Cursor => home.join("Library/Application Support/Cursor/User"),
+        Harness::Cursor => crate::app_support().join("Cursor").join("User"),
     }
 }
 
@@ -78,7 +82,7 @@ fn choose_folder(
     let inside = |inner: &str, outer: &str| {
         inner.len() > outer.len()
             && inner.starts_with(outer)
-            && (outer.ends_with('/') || inner.as_bytes()[outer.len()] == b'/')
+            && (outer.ends_with(['/', '\\']) || matches!(inner.as_bytes()[outer.len()], b'/' | b'\\'))
     };
     let mut scored: Vec<(&str, u32, bool)> = lines
         .iter()
@@ -153,6 +157,13 @@ mod tests {
         let counts = [("/d/runyard", 300), ("/d/runyard/apps/web/src", 900), ("/d/other", 1000)];
         let all = ["/d/runyard", "/d/runyard/apps/web/src", "/d/other"];
         assert_eq!(folder(&counts, &all).as_deref(), Some("/d/runyard"));
+    }
+
+    #[test]
+    fn windows_sub_folders_count_towards_the_project() {
+        let counts = [(r"C:\d\runyard", 300), (r"C:\d\runyard\apps\web", 900), (r"C:\d\other", 1000)];
+        let all = [r"C:\d\runyard", r"C:\d\runyard\apps\web", r"C:\d\other"];
+        assert_eq!(folder(&counts, &all).as_deref(), Some(r"C:\d\runyard"));
     }
 
     #[test]

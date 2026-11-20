@@ -39,8 +39,41 @@ pub mod text {
     pub const DISPLAY: f32 = 24.;
 }
 
+/// The system's own interface font, whatever it is called there.
 pub const UI_FONT: &str = ".SystemUIFont";
-pub const MONO_FONT: &str = "Menlo";
+
+static MONO: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// The fixed-width font, for paths, commands and figures.
+pub fn mono() -> &'static str {
+    MONO.get().copied().unwrap_or("Menlo")
+}
+
+/// Pick the fixed-width font from those installed. Menlo comes with every
+/// Mac; Windows and Linux each have their own, and Linux has several.
+pub fn choose_fonts(cx: &gpui::App) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    const KNOWN: [&str; 9] = [
+        "Consolas",
+        "Cascadia Mono",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+        "Noto Sans Mono",
+        "Ubuntu Mono",
+        "Adwaita Mono",
+        "Source Code Pro",
+        "Hack",
+    ];
+    let installed = cx.text_system().all_font_names();
+    let found = KNOWN
+        .into_iter()
+        .find(|name| installed.iter().any(|have| have == name));
+    if let Some(name) = found {
+        MONO.set(name).ok();
+    }
+}
 
 /// Claude Code's logo keeps its own colour in both appearances.
 pub fn claude_orange() -> Hsla {

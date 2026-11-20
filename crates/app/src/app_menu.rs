@@ -45,22 +45,46 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &Minimize, cx| in_front(cx, |window| window.minimize_window()));
     cx.on_action(|_: &Zoom, cx| in_front(cx, |window| window.zoom_window()));
 
-    cx.bind_keys([
-        KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-h", Hide, None),
-        KeyBinding::new("alt-cmd-h", HideOthers, None),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-r", Reindex, None),
-        KeyBinding::new("cmd-w", CloseWindow, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-        KeyBinding::new("cmd-0", ShowWindow, None),
-        KeyBinding::new("cmd-1", ShowSessions, None),
-        KeyBinding::new("cmd-2", ShowActivity, None),
-        KeyBinding::new("cmd-s", WriteSummary, None),
-    ]);
+    // "secondary" is the command key on a Mac and the control key elsewhere.
+    let mut keys = vec![
+        KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-r", Reindex, None),
+        KeyBinding::new("secondary-w", CloseWindow, None),
+        KeyBinding::new("secondary-0", ShowWindow, None),
+        KeyBinding::new("secondary-1", ShowSessions, None),
+        KeyBinding::new("secondary-2", ShowActivity, None),
+        KeyBinding::new("secondary-s", WriteSummary, None),
+    ];
+    if cfg!(target_os = "macos") {
+        // Hiding the app and minimising from the keyboard are Mac habits;
+        // elsewhere these keys mean other things.
+        keys.extend([
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("alt-cmd-h", HideOthers, None),
+            KeyBinding::new("cmd-m", Minimize, None),
+        ]);
+    }
+    cx.bind_keys(keys);
+    cx.set_menus(menus());
+}
 
-    cx.set_menus(vec![
-        Menu {
+/// The menus, laid out the way each system expects: a Mac has a menu named
+/// after the app and a Window menu; elsewhere Settings and Quit sit under
+/// File, and About under Help.
+fn menus() -> Vec<Menu> {
+    let mac = cfg!(target_os = "macos");
+    let mut file = vec![MenuItem::action("Reindex", Reindex), MenuItem::separator()];
+    if !mac {
+        file.extend([MenuItem::action("Settings…", OpenSettings), MenuItem::separator()]);
+    }
+    file.push(MenuItem::action("Close Window", CloseWindow));
+    if !mac {
+        file.push(MenuItem::action("Quit", Quit));
+    }
+    let mut menus = Vec::new();
+    if mac {
+        menus.push(Menu {
             name: "scrollback".into(),
             items: vec![
                 MenuItem::action("About scrollback", About),
@@ -75,15 +99,10 @@ pub fn install(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Quit scrollback", Quit),
             ],
-        },
-        Menu {
-            name: "File".into(),
-            items: vec![
-                MenuItem::action("Reindex", Reindex),
-                MenuItem::separator(),
-                MenuItem::action("Close Window", CloseWindow),
-            ],
-        },
+        });
+    }
+    menus.extend([
+        Menu { name: "File".into(), items: file },
         Menu {
             name: "Session".into(),
             items: vec![
@@ -100,6 +119,8 @@ pub fn install(cx: &mut App) {
                 MenuItem::action("Activity", ShowActivity),
             ],
         },
+    ]);
+    menus.push(if mac {
         Menu {
             name: "Window".into(),
             items: vec![
@@ -108,8 +129,14 @@ pub fn install(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Sessions Window", ShowWindow),
             ],
-        },
-    ]);
+        }
+    } else {
+        Menu {
+            name: "Help".into(),
+            items: vec![MenuItem::action("About scrollback", About)],
+        }
+    });
+    menus
 }
 
 fn in_front(cx: &mut App, act: impl FnOnce(&mut gpui::Window)) {

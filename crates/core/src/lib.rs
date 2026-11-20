@@ -18,18 +18,67 @@ pub use store::{Digest, MessageHit, Store};
 
 use std::path::PathBuf;
 
-/// The user's home directory.
-pub fn home() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-}
-
-/// Where scrollback keeps its own index. `SCROLLBACK_DATA_DIR` points it
-/// somewhere else, so a change can be tried against a copy of the index.
-pub fn data_dir() -> PathBuf {
-    std::env::var_os("SCROLLBACK_DATA_DIR")
+/// A folder named by an environment variable, when it is set to something.
+pub fn env_dir(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home().join("Library/Application Support/scrollback"))
+}
+
+/// The user's home directory.
+pub fn home() -> PathBuf {
+    // Windows names it `USERPROFILE`; a Unix-style shell there may also set
+    // `HOME`, sometimes to a folder of its own.
+    let names: [&str; 2] = if cfg!(windows) { ["USERPROFILE", "HOME"] } else { ["HOME", "USERPROFILE"] };
+    names.into_iter().find_map(env_dir).unwrap_or_default()
+}
+
+/// Where desktop apps keep each user's data: `~/Library/Application Support`
+/// on macOS, `%APPDATA%` on Windows, `~/.config` on Linux. Cursor and T3
+/// Code are found under here.
+pub fn app_support() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home().join("Library/Application Support")
+    } else if cfg!(windows) {
+        env_dir("APPDATA").unwrap_or_else(|| home().join("AppData").join("Roaming"))
+    } else {
+        env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config"))
+    }
+}
+
+/// Where command-line tools keep their data when they follow the XDG
+/// layout, which the ones read here do on every system, Windows included.
+pub fn xdg_data() -> PathBuf {
+    env_dir("XDG_DATA_HOME").unwrap_or_else(|| home().join(".local").join("share"))
+}
+
+/// Where scrollback keeps its own index and settings. `SCROLLBACK_DATA_DIR`
+/// points it somewhere else, so a change can be tried against a copy.
+pub fn data_dir() -> PathBuf {
+    if let Some(dir) = env_dir("SCROLLBACK_DATA_DIR") {
+        return dir;
+    }
+    let parent = if cfg!(target_os = "macos") {
+        app_support()
+    } else if cfg!(windows) {
+        // The index is rebuilt from what is on this machine, so it does not
+        // belong in the part of the profile that follows the user around.
+        env_dir("LOCALAPPDATA").unwrap_or_else(|| home().join("AppData").join("Local"))
+    } else {
+        xdg_data()
+    };
+    parent.join("scrollback")
+}
+
+/// The parts of a path between its separators. Sessions carry paths as the
+/// harness wrote them, so a backslash separates only in a path that starts
+/// the way Windows paths do.
+pub fn path_parts(path: &str) -> impl Iterator<Item = &str> {
+    let bytes = path.as_bytes();
+    let windows = path.starts_with("\\\\")
+        || (bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'));
+    path.split(move |c| c == '/' || (windows && c == '\\'))
+        .filter(|part| !part.is_empty())
 }
 
 /// Collapse whitespace and cut `text` to at most `max` characters.

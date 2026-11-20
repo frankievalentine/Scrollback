@@ -272,19 +272,27 @@ fn step_starts(raw: Option<&Value>, steps: usize, blocks: usize) -> Vec<usize> {
 }
 
 /// Where command-line tools are looked for: the PATH this process was given,
-/// then the usual install locations. Apps launched from the Dock or Finder
-/// get a bare PATH without the shell's additions, so those are added back.
+/// then the usual install locations. An app started from the Dock, the Start
+/// menu or a launcher gets a bare PATH without the shell's additions, so
+/// those are added back.
 fn tool_dirs() -> Vec<PathBuf> {
     let on_path = std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
         .unwrap_or_default();
     let home = crate::home();
-    let usual = [
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-        home.join(".local/bin"),
-        home.join(".claude/local"),
-    ];
+    // Claude's own installer, on every system.
+    let mut usual = vec![home.join(".local").join("bin"), home.join(".claude").join("local")];
+    if cfg!(windows) {
+        // Where npm puts globally installed commands.
+        usual.extend(crate::env_dir("APPDATA").map(|roaming| roaming.join("npm")));
+    } else {
+        usual.extend([
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+            home.join(".npm-global").join("bin"),
+        ]);
+    }
     let mut dirs: Vec<PathBuf> = Vec::new();
     for dir in on_path.into_iter().chain(usual) {
         if !dirs.contains(&dir) {
@@ -294,12 +302,37 @@ fn tool_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// The names the `claude` command can go by. On Windows it is a program
+/// when installed by Claude's installer and a script when installed by npm;
+/// the program is preferred, as a script cannot be handed every argument.
+const CLAUDE_NAMES: &[&str] = if cfg!(windows) {
+    &["claude.exe", "claude.cmd", "claude.bat"]
+} else {
+    &["claude"]
+};
+
 /// The `claude` binary, wherever it is installed.
 pub fn claude_binary() -> Option<PathBuf> {
-    tool_dirs()
-        .into_iter()
-        .map(|dir| dir.join("claude"))
-        .find(|candidate| candidate.is_file())
+    let dirs = tool_dirs();
+    CLAUDE_NAMES.iter().find_map(|name| {
+        dirs.iter()
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+/// Keep a command started from a windowed app from opening a console window
+/// of its own, which Windows otherwise does for every command-line program.
+#[cfg(windows)]
+fn without_console(command: &mut Command) -> &mut Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW)
+}
+
+#[cfg(not(windows))]
+fn without_console(command: &mut Command) -> &mut Command {
+    command
 }
 
 fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Value, f64)> {
@@ -311,10 +344,11 @@ fn ask_claude(instructions: &str, schema: &Value, condensed: &str) -> Result<(Va
     let workdir = crate::data_dir().join("summarizer");
     std::fs::create_dir_all(&workdir)?;
 
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    let mut child = without_console(&mut command)
         .current_dir(&workdir)
         // `claude` may itself be a script that needs node or another tool
-        // from the same places, which a Dock-launched app's PATH lacks.
+        // from the same places, which an app not started from a shell lacks.
         .env("PATH", std::env::join_paths(tool_dirs()).unwrap_or_default())
         .args(["-p", "--model", crate::Config::load().model()])
         .args(["--no-session-persistence", "--output-format", "json"])

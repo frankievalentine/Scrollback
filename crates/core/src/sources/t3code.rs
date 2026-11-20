@@ -5,8 +5,8 @@
 //! started from it, and the title it gave each thread.
 //!
 //! The database is `userdata/statev2.sqlite` under `~/.t3` (or
-//! `T3CODE_HOME`); the desktop app keeps the same file under Application
-//! Support. It is opened read-only.
+//! `T3CODE_HOME`); the desktop app keeps the same file where the system
+//! keeps each app's data. It is opened read-only.
 
 use crate::home;
 use anyhow::Result;
@@ -25,17 +25,14 @@ pub struct Binding {
 
 /// T3 Code's default data folder, for showing where it was looked for.
 pub fn root() -> PathBuf {
-    std::env::var_os("T3CODE_HOME")
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".t3"))
+    crate::env_dir("T3CODE_HOME").unwrap_or_else(|| home().join(".t3"))
 }
 
 /// Every database file T3 Code may have written on this machine.
 pub fn databases() -> Vec<PathBuf> {
     let mut folders = vec![root().join("userdata")];
     // The desktop app's own folder, whatever release channel named it.
-    let support = home().join("Library/Application Support");
+    let support = crate::app_support();
     if let Ok(entries) = std::fs::read_dir(&support) {
         for entry in entries.flatten() {
             if entry.file_name().to_string_lossy().starts_with("T3 Code") {
