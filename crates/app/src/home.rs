@@ -34,6 +34,17 @@ const CARET_BLINK: Duration = Duration::from_millis(530);
 /// How long to hold off after the Claude plan limit is reported.
 const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 
+/// Read the sessions the index already holds, without looking at the
+/// harnesses again. Instant, and possibly a minute or so behind.
+pub fn load_saved() -> Vec<Session> {
+    let hidden = Config::load().hidden_sources;
+    let mut sessions = Store::open()
+        .and_then(|store| store.sessions(false))
+        .unwrap_or_default();
+    sessions.retain(|s| !hidden.iter().any(|slug| slug == s.origin.slug()));
+    sessions
+}
+
 /// Refresh the index and read every session from it.
 pub fn load() -> (Vec<Session>, SharedString) {
     let loaded = Store::open().and_then(|mut store| {

@@ -192,7 +192,9 @@ fn main() {
                 cx.update(|cx| {
                     let icon = tray::rect(cx);
                     eprintln!("menu bar icon at {icon:?}");
+                    let started = std::time::Instant::now();
                     popover::toggle(icon, cx);
+                    eprintln!("popover opened in {:.1?}", started.elapsed());
                 })
                 .ok();
             })

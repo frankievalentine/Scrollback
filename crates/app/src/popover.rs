@@ -1,6 +1,8 @@
-//! The popover under the menu bar icon: a quick look at recent sessions and
-//! their summaries without opening the window. Type to search, arrow through
-//! the list, copy a resume command, or hand a session to the window.
+//! The popover under the menu bar icon: quick access to the most recent
+//! sessions that already have a summary. It opens at once from the saved
+//! index and never waits on a summary being written; a session shows up here
+//! once it has one. Type to search, arrow through the list, copy a resume
+//! command, or hand a session to the window.
 
 use crate::home::{self, clock, day_label, facts, label, outcome_mark, resume_command};
 use crate::open_main;
@@ -11,21 +13,16 @@ use gpui::{
     FontWeight, Global, KeyDownEvent, Pixels, ScrollHandle, SharedString, Window, WindowBounds,
     WindowHandle, WindowKind, WindowOptions,
 };
-use crate::settings::Settings;
 use scrollback_core::search::Searcher;
-use scrollback_core::{summarize, Session, Store, Summary};
-use std::collections::{HashMap, HashSet};
+use scrollback_core::Session;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 500.;
-/// How many sessions the list holds.
-const SHOWN: usize = 40;
+/// How many sessions the list holds: the most recent with a summary.
+const SHOWN: usize = 15;
 /// A session written to this recently counts as in use.
 const ACTIVE_WITHIN_MS: i64 = 5 * 60 * 1000;
-/// How long a session must stay selected before a missing summary is
-/// written for it, so arrowing down the list does not start one per row.
-const SETTLE: Duration = Duration::from_millis(450);
 
 /// The popover, while it is open, and when it last closed itself.
 struct Open {
@@ -59,7 +56,9 @@ pub fn toggle(icon: Option<tray_icon::Rect>, cx: &mut App) {
         return;
     }
 
-    let (sessions, _) = home::load();
+    // What the index already holds, so the popover is there at once. It
+    // brings itself up to date a moment later.
+    let sessions = home::load_saved();
     let quiet = std::env::var_os("SCROLLBACK_BACKGROUND").is_some();
     let opened = cx.open_window(
         WindowOptions {
@@ -139,12 +138,9 @@ pub struct Popover {
     searcher: Searcher,
     /// Which button last copied something, to say so on it.
     copied: Option<&'static str>,
-    /// Keys of sessions whose summary is being written right now.
-    busy: HashSet<String>,
-    /// Why a summary could not be written, by session key.
-    failed: HashMap<String, String>,
-    /// Whether summaries may be written without being asked.
-    auto: bool,
+    /// Sessions newer than the oldest one listed that have no summary yet,
+    /// so are not listed.
+    waiting: usize,
     scroll: ScrollHandle,
     detail_scroll: ScrollHandle,
     measured: ui::Measured,
@@ -171,86 +167,46 @@ impl Popover {
             query: String::new(),
             searcher: Searcher::new(),
             copied: None,
-            busy: HashSet::new(),
-            failed: HashMap::new(),
-            auto: {
-                let config = &cx.global::<Settings>().0;
-                config.onboarded
-                    && config.auto_summarize
-                    && std::env::var_os("SCROLLBACK_NO_CLAUDE").is_none()
-                    && summarize::claude_binary().is_some()
-            },
+            waiting: 0,
             scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             measured: Default::default(),
             focus: cx.focus_handle(),
         };
         popover.recompute();
-        popover.summarize_when_settled(cx);
+
+        // The saved index may be a little behind: read the harnesses again in
+        // the background and take in whatever is new.
+        cx.spawn(async move |this, cx| {
+            let (sessions, _) = cx.background_executor().spawn(async { home::load() }).await;
+            this.update(cx, |this, cx| this.refreshed(sessions, cx)).ok();
+        })
+        .detach();
         popover
     }
 
-    /// The point of the popover is the summary, so a selected session that
-    /// has none gets one written, once the selection has rested on it. This
-    /// includes sessions still in use, which the window leaves until they
-    /// go quiet; their summary is refreshed then.
-    fn summarize_when_settled(&mut self, cx: &mut Context<Self>) {
-        if !self.auto {
+    /// Take in a fresh read of the sessions, keeping the selection.
+    fn refreshed(&mut self, sessions: Vec<Session>, cx: &mut Context<Self>) {
+        let unchanged = sessions.len() == self.sessions.len()
+            && sessions.iter().zip(&self.sessions).all(|(new, old)| {
+                new.key() == old.key()
+                    && new.updated_ms == old.updated_ms
+                    && new.summary.is_some() == old.summary.is_some()
+                    && new.summary_stale == old.summary_stale
+            });
+        if unchanged {
             return;
         }
-        let Some(key) = self.current().filter(|s| s.summary.is_none()).map(Session::key) else {
-            return;
-        };
-        if self.busy.contains(&key) || self.failed.contains_key(&key) {
-            return;
-        }
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SETTLE).await;
-            this.update(cx, |this, cx| {
-                if this.current().map(Session::key).as_deref() == Some(key.as_str()) {
-                    this.write_summary(cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Write the selected session's summary now.
-    fn write_summary(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.current().cloned() else { return };
-        let key = session.key();
-        if !self.busy.insert(key.clone()) {
-            return;
-        }
-        self.failed.remove(&key);
-        cx.notify();
-        // The request runs to the end and is saved even if the popover has
-        // closed by then; the summary is there the next time it opens.
-        let work = cx.background_executor().spawn(async move {
-            let written = summarize::summarize(&session)?;
-            Store::open()?.set_summary(&session, &written.summary)?;
-            anyhow::Ok(written.summary)
+        let selected = self.current().map(Session::key);
+        let copied = self.copied;
+        self.sessions = sessions;
+        self.recompute();
+        let kept = selected.and_then(|key| {
+            self.listed.iter().position(|&i| self.sessions[i].key() == key)
         });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |this, cx| this.summary_arrived(key, result, cx)).ok();
-        })
-        .detach();
-    }
-
-    fn summary_arrived(&mut self, key: String, result: anyhow::Result<Summary>, cx: &mut Context<Self>) {
-        self.busy.remove(&key);
-        match result {
-            Ok(summary) => {
-                if let Some(session) = self.sessions.iter_mut().find(|s| s.key() == key) {
-                    session.summary = Some(summary);
-                    session.summary_stale = false;
-                }
-            }
-            Err(err) => {
-                self.failed.insert(key, format!("{err:#}"));
-            }
+        if let Some(selection) = kept {
+            self.selected = selection;
+            self.copied = copied;
         }
         cx.notify();
     }
@@ -258,12 +214,12 @@ impl Popover {
     /// What the popover holds, for the development key-press log.
     pub fn dev_state(&self) -> String {
         format!(
-            "popover query={:?} listed={} selected={} copied={:?} busy={} summary={} title={:?}",
+            "popover query={:?} listed={} selected={} copied={:?} waiting={} summary={} title={:?}",
             self.query,
             self.listed.len(),
             self.selected,
             self.copied,
-            self.busy.len(),
+            self.waiting,
             self.current().is_some_and(|s| s.summary.is_some()),
             self.current().map(|s| s.display_title().chars().take(40).collect::<String>()),
         )
@@ -273,18 +229,21 @@ impl Popover {
         self.listed.get(self.selected).map(|&i| &self.sessions[i])
     }
 
-    /// Rebuild the list for the current search.
+    /// Rebuild the list for the current search. Only sessions that already
+    /// have a summary are listed: the most recent few, or the best matches.
     fn recompute(&mut self) {
         self.entries.clear();
         self.selected = 0;
         self.copied = None;
+        self.waiting = 0;
         if !self.query.trim().is_empty() {
             self.listed = self
                 .searcher
                 .search(&self.query, &self.sessions)
                 .into_iter()
-                .take(SHOWN)
                 .map(|hit| hit.index)
+                .filter(|&i| self.sessions[i].summary.is_some())
+                .take(SHOWN)
                 .collect();
             if !self.listed.is_empty() {
                 self.entries.push(Entry::Heading("Results"));
@@ -296,7 +255,16 @@ impl Popover {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        self.listed = (0..self.sessions.len().min(SHOWN)).collect();
+        self.listed = (0..self.sessions.len())
+            .filter(|&i| self.sessions[i].summary.is_some())
+            .take(SHOWN)
+            .collect();
+        // Sessions are newest first, so anything before the last one listed
+        // that is not itself listed is a newer session awaiting its summary.
+        self.waiting = match self.listed.last() {
+            Some(&last) => last + 1 - self.listed.len(),
+            None => self.sessions.len().min(SHOWN),
+        };
         let mut last = "";
         for &i in &self.listed {
             let session = &self.sessions[i];
@@ -331,7 +299,6 @@ impl Popover {
         if let Some(line) = line {
             self.scroll.scroll_to_item(line);
         }
-        self.summarize_when_settled(cx);
         cx.notify();
     }
 
@@ -416,7 +383,6 @@ impl Popover {
                 cx.notify();
             }
         }
-        self.summarize_when_settled(cx);
         cx.stop_propagation();
     }
 
@@ -476,7 +442,14 @@ impl Popover {
                     .py(px(8.))
                     .text_size(px(text::SMALL))
                     .text_color(t.ink3)
-                    .child(if self.sessions.is_empty() { "No sessions yet." } else { "Nothing matches." }),
+                    .line_height(px(19.))
+                    .child(if !self.query.trim().is_empty() {
+                        "No summarised session matches."
+                    } else if self.sessions.is_empty() {
+                        "No sessions yet."
+                    } else {
+                        "No summaries yet. Sessions appear here once they have one."
+                    }),
             );
         }
         for (line, entry) in self.entries.iter().enumerate() {
@@ -587,83 +560,34 @@ impl Popover {
                     .line_clamp(3).text_ellipsis()
                     .child(session.display_title().to_string()),
             );
-        let key = session.key();
-        let writing = self.busy.contains(&key);
         let mut sections: Vec<Div> = Vec::new();
-        match &session.summary {
-            Some(summary) => {
-                top = top
-                    .child(
-                        div()
-                            .text_size(px(text::LEAD))
-                            .line_height(px(23.))
-                            .text_color(t.ink2)
-                            .child(summary.summary.clone()),
-                    )
-                    .child(div().flex().items_center().gap(px(12.)).child(outcome_mark(summary, true, t)).children(
-                        session.summary_stale.then(|| {
+        if let Some(summary) = &session.summary {
+            top = top
+                .child(
+                    div()
+                        .text_size(px(text::LEAD))
+                        .line_height(px(23.))
+                        .text_color(t.ink2)
+                        .child(summary.summary.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(outcome_mark(summary, true, t))
+                        .children(session.summary_stale.then(|| {
                             div()
                                 .text_size(px(text::CAPTION))
                                 .text_color(t.ink3)
-                                .child(if writing { "Updating…" } else { "Written before the session moved on." })
-                        }),
-                    ));
-                if !summary.open_ends.is_empty() {
-                    sections.push(listing("Open ends", &summary.open_ends, false, t));
-                }
-                if !summary.happened.is_empty() {
-                    sections.push(listing("What happened", &summary.happened, true, t));
-                }
+                                .child("Written before the session moved on.")
+                        })),
+                );
+            if !summary.open_ends.is_empty() {
+                sections.push(listing("Open ends", &summary.open_ends, false, t));
             }
-            None => {
-                // No summary yet: say what is happening about that, and show
-                // the request as the next best thing.
-                let status: Div = if writing {
-                    div().text_color(t.ink3).child("Writing a summary…")
-                } else if let Some(error) = self.failed.get(&key) {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(t.ink2)
-                                .child(format!("The summary could not be written: {error}")),
-                        )
-                        .child(
-                            action("popover-retry", "Try again", "", false, t)
-                                .on_click(cx.listener(|this, _, _, cx| this.write_summary(cx))),
-                        )
-                } else if self.auto {
-                    div().text_color(t.ink3).child("No summary yet.")
-                } else {
-                    div().flex().child(
-                        action("popover-write", "Write summary", "", false, t)
-                            .on_click(cx.listener(|this, _, _, cx| this.write_summary(cx))),
-                    )
-                };
-                top = top.child(status);
-                if !session.first_prompt.is_empty() {
-                    sections.push(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(5.))
-                            .pt(px(16.))
-                            .border_t_1()
-                            .border_color(t.line)
-                            .child(label("You asked", t))
-                            .child(
-                                div()
-                                    .line_height(px(22.))
-                                    .text_color(t.ink2)
-                                    .line_clamp(6).text_ellipsis()
-                                    .child(session.first_prompt.clone()),
-                            ),
-                    );
-                }
+            if !summary.happened.is_empty() {
+                sections.push(listing("What happened", &summary.happened, true, t));
             }
         }
 
@@ -766,7 +690,14 @@ impl Render for Popover {
                     .text_color(t.ink3)
                     .child("↑↓ move")
                     .child("type to search")
-                    .child("esc close"),
+                    .child("esc close")
+                    .child(div().flex_1())
+                    .children((self.waiting > 0 && self.query.trim().is_empty()).then(|| {
+                        match self.waiting {
+                            1 => "1 newer session has no summary yet".to_string(),
+                            n => format!("{n} newer sessions have no summary yet"),
+                        }
+                    })),
             )
     }
 }
