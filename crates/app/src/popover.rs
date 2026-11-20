@@ -913,7 +913,9 @@ impl Popover {
                     .gap(px(8.))
                     .text_size(px(text::SMALL))
                     .child(logo(share.origin, t, 13.))
-                    .child(div().w(px(64.)).flex_shrink_0().one_line().child(share.origin.name()))
+                    // Wide enough for the longest names, such as Claude Code
+                    // and Copilot CLI.
+                    .child(div().w(px(92.)).flex_shrink_0().one_line().child(share.origin.name()))
                     .child(
                         div().flex_1().h(px(6.)).rounded(px(3.)).bg(t.fill).child(
                             div()

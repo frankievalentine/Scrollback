@@ -19,9 +19,9 @@ scrolling through transcripts.
 
 ## Features
 
-- **A small, fast native app.** Built in Rust with [GPUI](https://www.gpui.rs),
-  the UI framework behind the Zed editor. It opens with your sessions already
-  on screen and stays out of the way in the menu bar.
+- **A small, fast native app.** Built in Rust with [GPUI](https://www.gpui.rs).
+  It opens with your sessions already on screen and stays out of the way in
+  the menu bar.
 - **Fast search.** Type anywhere in the window to search titles, projects,
   summaries and every message in every session, with results as you type.
 - **Summaries by default.** Once a session goes quiet, Scrollback writes a
