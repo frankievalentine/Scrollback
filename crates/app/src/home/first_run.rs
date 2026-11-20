@@ -5,7 +5,7 @@
 use super::{facts, label, logo, Home};
 use crate::theme::{text, Theme, mono};
 use crate::ui::{self, OneLine, Reachable};
-use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent};
+use gpui::{div, prelude::*, px, svg, Context, Div, FontWeight, KeyDownEvent, SharedString};
 use scrollback_core::{sources, Harness, Origin};
 
 const RECENT_SHOWN: usize = 4;
@@ -125,9 +125,13 @@ impl Home {
                 "summaries-auto",
                 true,
                 "Automatically",
-                "Claude Code writes one once a session has been quiet for ten minutes. \
-                 It is sent your prompts and the agent's replies, never tool output, \
-                 and it counts towards your Claude plan.",
+                format!(
+                    "{} writes one once a session has been quiet for {} minutes. It is sent your \
+                     prompts and the agent's replies, never tool output. {}",
+                    capitalised(&scrollback_core::provider::writer(&self.config)),
+                    self.config.quiet_minutes,
+                    scrollback_core::provider::destination(&self.config),
+                ),
                 t,
                 cx,
             ))
@@ -139,19 +143,39 @@ impl Home {
                 t,
                 cx,
             ));
-        if !self.summaries_ready {
-            choice = choice.child(
-                div()
-                    .pt(px(2.))
-                    .text_size(px(text::SMALL))
-                    .line_height(px(19.))
-                    .text_color(t.ink2)
-                    .child(match scrollback_core::provider::ready(&self.config) {
-                        Err(why) => format!("{why} Summaries can be set up in Settings later."),
-                        Ok(()) => String::new(),
-                    }),
-            );
-        }
+        // Who writes them can be changed here, before anything is sent:
+        // Ollama, say, when Claude Code is not installed.
+        let fill = t.fill;
+        let why_not = scrollback_core::provider::ready(&self.config).err();
+        choice = choice.child(
+            div()
+                .pt(px(2.))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_x(px(10.))
+                .gap_y(px(4.))
+                .text_size(px(text::SMALL))
+                .line_height(px(19.))
+                .children(why_not.map(|why| div().text_color(t.ink2).child(why)))
+                .child(
+                    div()
+                        .id("choose-provider")
+                        .reachable(t)
+                        .px(px(8.))
+                        .py(px(2.))
+                        .mx(px(-8.))
+                        .rounded(px(6.))
+                        .text_color(t.accent)
+                        .font_weight(FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(fill))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            crate::settings::open(cx, crate::settings::Tab::Summaries);
+                        }))
+                        .child("Choose who writes summaries…"),
+                ),
+        );
 
         let open = div()
             .flex()
@@ -266,7 +290,7 @@ impl Home {
         id: &'static str,
         auto: bool,
         title: &'static str,
-        text: &'static str,
+        text: impl Into<SharedString>,
         t: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -317,7 +341,7 @@ impl Home {
                             .text_size(px(text::SMALL))
                             .line_height(px(19.))
                             .text_color(t.ink2)
-                            .child(text),
+                            .child(text.into()),
                     ),
             )
     }
@@ -437,4 +461,14 @@ fn harness_row(f: &Found, t: &Theme) -> Div {
                 ),
         )
         .child(status.flex_shrink_0())
+}
+
+/// A sentence's first letter in capitals: "qwen3:8b in Ollama" stays as it
+/// is, "a model in Ollama" becomes "A model in Ollama".
+fn capitalised(text: &str) -> String {
+    let mut letters = text.chars();
+    match letters.next() {
+        Some(first) if text.starts_with("a ") => first.to_uppercase().chain(letters).collect(),
+        _ => text.to_string(),
+    }
 }

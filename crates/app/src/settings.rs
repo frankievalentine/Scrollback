@@ -512,15 +512,7 @@ impl SettingsView {
                 Provider::OpenAiCompatible => self.endpoint_settings(t, cx),
             })
             .child(status);
-        let sent = match chosen {
-            Provider::Claude => {
-                "Requests go through the Claude Code command line and count towards your Claude plan."
-            }
-            Provider::Ollama => "Requests go to Ollama on this computer, so nothing leaves it.",
-            Provider::OpenAiCompatible => {
-                "Requests go to the service above with your API key, and are billed by it."
-            }
-        };
+        let sent = provider::destination(&self.config);
         page = page.child(
             div()
                 .pt(px(18.))

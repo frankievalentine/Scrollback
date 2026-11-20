@@ -135,6 +135,50 @@ pub fn default_ollama_url() -> String {
     }
 }
 
+/// Who writes the summaries, in a few words: "Claude Haiku 5.5",
+/// "qwen3:8b in Ollama", "gpt-6-luna through OpenAI".
+pub fn writer(config: &Config) -> String {
+    match config.summary_provider {
+        Provider::Claude => {
+            let name = CLAUDE_MODELS.iter().find(|(id, _)| *id == config.model()).map_or("Haiku", |(_, name)| *name);
+            format!("Claude {name}")
+        }
+        Provider::Ollama => match config.ollama_model.trim() {
+            "" => "a model in Ollama".to_string(),
+            model => format!("{model} in Ollama"),
+        },
+        Provider::OpenAiCompatible => match config.endpoint_model().trim() {
+            "" => format!("a model through {}", config.endpoint.name()),
+            model => format!("{model} through {}", config.endpoint.name()),
+        },
+    }
+}
+
+/// Where summary requests go and what they cost, as one sentence.
+pub fn destination(config: &Config) -> String {
+    match config.summary_provider {
+        Provider::Claude => {
+            "Requests go through the Claude Code command line and count towards your Claude plan.".to_string()
+        }
+        Provider::Ollama => "Requests go to Ollama on this computer, so nothing leaves it.".to_string(),
+        Provider::OpenAiCompatible => format!(
+            "Requests go to {} with your API key, and are billed by it.",
+            config.endpoint.name()
+        ),
+    }
+}
+
+/// Whether an error says the provider's usage or rate limit was reached,
+/// which affects every request, rather than something wrong with one
+/// session (such as a session too long for the model's context limit).
+pub fn is_usage_limit(message: &str) -> bool {
+    let message = message.to_lowercase();
+    ["rate limit", "rate_limit", "usage limit", "limit reached", "limit exceeded", "quota", "too many requests", "429", "insufficient credit", "credit balance"]
+        .iter()
+        .any(|sign| message.contains(sign))
+        && !message.contains("context")
+}
+
 /// Whether summaries can be written with the chosen provider, and if not,
 /// why, in words for the settings.
 pub fn ready(config: &Config) -> Result<(), String> {
@@ -353,6 +397,15 @@ mod tests {
             assert_eq!(serde_json::to_value(endpoint).unwrap(), json!(endpoint.slug()));
         }
         assert_eq!(serde_json::to_value(Provider::OpenAiCompatible).unwrap(), json!("openai-compatible"));
+    }
+
+    #[test]
+    fn tells_a_usage_limit_from_a_long_session() {
+        assert!(is_usage_limit("Claude AI usage limit reached|1763000000"));
+        assert!(is_usage_limit("OpenAI said: Rate limit reached for gpt-6-luna"));
+        assert!(is_usage_limit("Vercel AI Gateway said: 429 Too Many Requests"));
+        assert!(!is_usage_limit("Ollama said: the input exceeds the context limit"));
+        assert!(!is_usage_limit("the reply was not a JSON object"));
     }
 
     #[test]

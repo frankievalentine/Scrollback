@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const EVERY: Duration = Duration::from_secs(60);
 /// How many summaries one pass writes, so a backlog is worked off gently.
 const PER_PASS: usize = 2;
-/// How long to hold off after the Claude plan limit is reported.
+/// How long to hold off after the provider reports a usage limit.
 const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 
 pub fn start(cx: &mut App) {
@@ -41,7 +41,7 @@ pub fn start(cx: &mut App) {
                 .await;
             for (key, error) in outcome {
                 eprintln!("background summary failed for {key}: {error}");
-                if error.to_lowercase().contains("limit") {
+                if scrollback_core::provider::is_usage_limit(&error) {
                     paused_until = Some(Instant::now() + LIMIT_PAUSE);
                 }
                 failed.insert(key);

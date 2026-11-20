@@ -33,7 +33,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const REFRESH_EVERY: Duration = Duration::from_secs(60);
 /// How many summaries are written at once.
 const SUMMARIES_AT_ONCE: usize = 2;
-/// How long to hold off after the Claude plan limit is reported.
+/// How long to hold off after the provider reports a usage limit.
 const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 
 /// Read the sessions the index already holds, without looking at the
@@ -147,7 +147,7 @@ pub struct Home {
     /// The last summary error per session key.
     failed: HashMap<String, String>,
     config: Config,
-    /// Set when the Claude plan limit was hit; no summaries start before it.
+    /// Set when the provider reported a usage limit; no summaries start before it.
     paused_until: Option<Instant>,
     searcher: Searcher,
     search_time: Duration,
@@ -952,8 +952,9 @@ impl Home {
             // Say when it resumes by itself and how to try sooner.
             let resumes = Local::now() + chrono::Duration::from_std(until - Instant::now()).unwrap_or_default();
             return Some(format!(
-                "summaries paused until {}: Claude plan limit reached. {} tries again now.",
+                "summaries paused until {}: {} reported a usage limit. {} tries again now.",
                 resumes.format("%H:%M"),
+                self.config.summary_provider.name(),
                 ui::shortcut("R")
             ));
         }
@@ -1160,9 +1161,9 @@ impl Home {
             Err(err) => {
                 let message = format!("{err:#}");
                 eprintln!("summary failed for {key}: {message}");
-                // The plan limit affects every request, so stop asking for a
+                // A usage limit affects every request, so stop asking for a
                 // while instead of failing each session in turn.
-                if message.to_lowercase().contains("limit") {
+                if scrollback_core::provider::is_usage_limit(&message) {
                     self.paused_until = Some(Instant::now() + LIMIT_PAUSE);
                 }
                 self.failed.insert(key, message);

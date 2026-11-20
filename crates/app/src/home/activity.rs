@@ -208,7 +208,7 @@ impl Home {
             Err(err) => {
                 let message = format!("{err:#}");
                 eprintln!("digest failed for {scope}: {message}");
-                if message.to_lowercase().contains("limit") {
+                if scrollback_core::provider::is_usage_limit(&message) {
                     self.paused_until = Some(Instant::now() + LIMIT_PAUSE);
                 }
                 self.digest_failed = Some(fingerprint);
