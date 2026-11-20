@@ -81,13 +81,6 @@ A click on the menu bar icon opens recent summaries, or the week at a glance.
   </tr>
 </table>
 
-### Before any sessions
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/empty-dark.png">
-  <img src="docs/screenshots/empty-light.png" alt="The session window with no sessions yet">
-</picture>
-
 ## Sources
 
 | Source | Read from |
