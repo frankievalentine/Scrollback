@@ -1892,7 +1892,7 @@ pub(crate) fn day_label(ms: i64) -> String {
     }
 }
 
-fn duration_label(ms: i64) -> String {
+pub(crate) fn duration_label(ms: i64) -> String {
     let minutes = ms / 60_000;
     match minutes {
         0 => "under a minute".to_string(),
@@ -1901,7 +1901,7 @@ fn duration_label(ms: i64) -> String {
     }
 }
 
-fn compact_number(n: u64) -> String {
+pub(crate) fn compact_number(n: u64) -> String {
     match n {
         0..=999 => n.to_string(),
         1_000..=999_999 => format!("{:.0}k", n as f64 / 1e3),

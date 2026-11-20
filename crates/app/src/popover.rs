@@ -4,7 +4,10 @@
 //! once it has one, which for a session in use is a couple of minutes in. Type to search, arrow through the list, copy a resume
 //! command, or hand a session to the window.
 
-use crate::home::{self, clock, covers, day_label, facts, label, outcome_mark, resume_command};
+use crate::home::{
+    self, clock, compact_number, covers, day_label, duration_label, facts, label, logo, outcome_mark,
+    resume_command,
+};
 use crate::open_main;
 use crate::theme::{text, Theme, mono, UI_FONT};
 use crate::ui::{self, OneLine, Reachable};
@@ -14,26 +17,37 @@ use gpui::{
     WindowHandle, WindowKind, WindowOptions,
 };
 use scrollback_core::search::Searcher;
-use scrollback_core::Session;
+use scrollback_core::{Activity, Session};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const WIDTH: f32 = 800.;
-const HEIGHT: f32 = 500.;
+const WIDTH: f32 = 640.;
+const HEIGHT: f32 = 440.;
+/// The width of the list of sessions down the left.
+const LIST_WIDTH: f32 = 228.;
 /// How many sessions the list holds: the most recent with a summary.
 const SHOWN: usize = 15;
 /// A session written to this recently counts as in use.
 const ACTIVE_WITHIN_MS: i64 = 5 * 60 * 1000;
 
-/// The popover, while it is open, and when it last closed itself.
+/// What the popover shows: recent sessions, or the week at a glance.
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Recent,
+    Activity,
+}
+
+/// The popover, while it is open, when it last closed itself, and which view
+/// it last showed, so it opens on the same one.
 struct Open {
     window: Option<WindowHandle<Popover>>,
     closed_at: Option<Instant>,
+    view: View,
 }
 
 impl Global for Open {}
 
 pub fn install(cx: &mut App) {
-    cx.set_global(Open { window: None, closed_at: None });
+    cx.set_global(Open { window: None, closed_at: None, view: View::Recent });
 }
 
 /// Open the popover under the icon, or close it if it is open. `icon` is
@@ -138,6 +152,11 @@ enum Entry {
 }
 
 pub struct Popover {
+    view: View,
+    /// The last seven days, today included.
+    week: Activity,
+    /// Sessions used today.
+    today: usize,
     sessions: Vec<Session>,
     entries: Vec<Entry>,
     /// The sessions listed, in order; the selection is an index into this.
@@ -172,7 +191,15 @@ impl Popover {
             }
         })
         .detach();
+        // Development aid: `SCROLLBACK_DEV_POPOVER=activity` opens on that view.
+        let view = match std::env::var("SCROLLBACK_DEV_POPOVER").as_deref() {
+            Ok("activity") => View::Activity,
+            _ => cx.global::<Open>().view,
+        };
         let mut popover = Popover {
+            view,
+            week: Activity::default(),
+            today: 0,
             sessions,
             entries: Vec::new(),
             listed: Vec::new(),
@@ -260,6 +287,8 @@ impl Popover {
     /// Rebuild the list for the current search. Only sessions that already
     /// have a summary are listed: the most recent few, or the best matches.
     fn recompute(&mut self) {
+        self.week = Activity::over(&self.sessions, 7);
+        self.today = Activity::over(&self.sessions, 1).sessions;
         self.entries.clear();
         self.selected = 0;
         self.copied = None;
@@ -378,6 +407,14 @@ impl Popover {
         let keystroke = &event.keystroke;
         let mods = keystroke.modifiers;
         match keystroke.key.as_str() {
+            // Left and right switch views while nothing is typed.
+            "left" | "right" if self.query.is_empty() => {
+                let view = match self.view {
+                    View::Recent => View::Activity,
+                    View::Activity => View::Recent,
+                };
+                self.show(view, cx);
+            }
             "down" => self.select(self.selected + 1, cx),
             "up" => self.select(self.selected.saturating_sub(1), cx),
             "enter" => self.copy_resume(cx),
@@ -407,7 +444,9 @@ impl Popover {
                 if typed.is_empty() || typed.chars().any(char::is_control) {
                     return;
                 }
+                // Typing is a search, which belongs to the recent list.
                 self.query.push_str(typed);
+                self.view = View::Recent;
                 self.recompute();
                 cx.notify();
             }
@@ -415,21 +454,59 @@ impl Popover {
         cx.stop_propagation();
     }
 
-    fn search_row(&self, t: &Theme) -> Div {
+    fn show(&mut self, view: View, cx: &mut Context<Self>) {
+        self.view = view;
+        cx.global_mut::<Open>().view = view;
+        cx.notify();
+    }
+
+    fn search_row(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let lit = self.caret_lit || self.typed_at.elapsed() < ui::CARET_BLINK;
         let text = ui::search_field(&self.query, "Search sessions", lit, t);
+        let tab = |id: &'static str, name: &'static str, view: View, cx: &mut Context<Self>| {
+            let on = self.view == view;
+            let ink = t.ink;
+            div()
+                .id(id)
+                .reachable(t)
+                .h(px(24.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .text_size(px(text::CAPTION))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(if on { t.ink } else { t.ink3 })
+                .when(on, |el| el.bg(t.segment))
+                .cursor_pointer()
+                .hover(move |style| style.text_color(ink))
+                .on_click(cx.listener(move |this, _, _, cx| this.show(view, cx)))
+                .child(name)
+        };
         div()
-            .h(px(52.))
+            .h(px(44.))
             .flex_shrink_0()
-            .px(px(18.))
+            .pl(px(16.))
+            .pr(px(10.))
             .flex()
             .items_center()
-            .gap(px(12.))
+            .gap(px(10.))
             .border_b_1()
             .border_color(t.line)
-            .text_size(px(text::LEAD))
-            .child(svg().path("search.svg").size(px(16.)).flex_shrink_0().text_color(t.ink3))
+            .text_size(px(text::BODY))
+            .child(svg().path("search.svg").size(px(14.)).flex_shrink_0().text_color(t.ink3))
             .child(div().flex_1().min_w(px(0.)).child(text))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .p(px(2.))
+                    .gap(px(2.))
+                    .rounded(px(8.))
+                    .bg(t.fill)
+                    .child(tab("popover-recent", "Recent", View::Recent, cx))
+                    .child(tab("popover-activity", "Activity", View::Activity, cx)),
+            )
     }
 
     fn list(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -439,16 +516,16 @@ impl Popover {
         let chosen = self.listed.get(self.selected).copied();
         let mut list = div()
             .id("popover-list")
-            .w(px(292.))
+            .w(px(LIST_WIDTH))
             .flex_shrink_0()
             .h_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .flex()
             .flex_col()
-            .gap(px(2.))
-            .px(px(8.))
-            .py(px(10.))
+            .gap(px(1.))
+            .px(px(6.))
+            .py(px(8.))
             .border_r_1()
             .border_color(t.line);
         if self.entries.is_empty() {
@@ -509,10 +586,10 @@ impl Popover {
                             .id(("popover-session", line))
                             .flex()
                             .flex_col()
-                            .gap(px(3.))
+                            .gap(px(2.))
                             .px(px(10.))
-                            .py(px(8.))
-                            .rounded(px(8.))
+                            .py(px(6.))
+                            .rounded(px(7.))
                             .cursor_pointer()
                             .border_l_2()
                             .border_color(if selected { t.accent } else { t.accent.opacity(0.) })
@@ -536,9 +613,9 @@ impl Popover {
                                     .text_size(px(text::CAPTION))
                                     .text_color(t.ink3)
                                     .child(mark)
+                                    .child(logo(session.origin, t, 11.))
                                     .child(div().min_w(px(0.)).one_line().child(format!(
-                                        "{} · {} · {}",
-                                        session.origin.name(),
+                                        "{} · {}",
                                         session.project(),
                                         when
                                     ))),
@@ -557,41 +634,46 @@ impl Popover {
             .h_full()
             .flex()
             .flex_col()
-            .gap(px(18.))
-            .px(px(28.))
-            .py(px(22.));
+            .gap(px(14.))
+            .px(px(20.))
+            .py(px(16.));
         let Some(session) = self.current() else {
-            return pane.child(div().text_color(t.ink3).child("Nothing selected."));
+            return pane.child(div().text_size(px(text::SMALL)).text_color(t.ink3).child("Nothing selected."));
         };
+        // The same glance as the window's card: what it was, how it ended,
+        // and what is left. The rest is a click away in the window.
         let mut top = div()
             .flex()
             .flex_col()
-            .gap(px(10.))
-            .child(facts(session, t, true))
+            .gap(px(8.))
+            .child(facts(session, t, false))
             .child(
                 div()
-                    .text_size(px(text::TITLE))
-                    .line_height(px(25.))
+                    .text_size(px(text::LEAD))
+                    .line_height(px(21.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .line_clamp(3).text_ellipsis()
+                    .line_clamp(2)
+                    .text_ellipsis()
                     .child(session.display_title().to_string()),
             );
-        let mut sections: Vec<Div> = Vec::new();
         if let Some(summary) = &session.summary {
             top = top
                 .child(
                     div()
-                        .text_size(px(text::LEAD))
-                        .line_height(px(23.))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(20.))
                         .text_color(t.ink2)
                         .child(summary.summary.clone()),
                 )
                 .child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .items_center()
-                        .gap(px(12.))
-                        .child(outcome_mark(summary, true, t))
+                        .gap_x(px(12.))
+                        .gap_y(px(2.))
+                        .text_size(px(text::SMALL))
+                        .child(outcome_mark(summary, false, t))
                         .children(covers(session).map(|covers| {
                             div()
                                 .text_size(px(text::CAPTION))
@@ -600,36 +682,52 @@ impl Popover {
                         })),
                 );
             if !summary.open_ends.is_empty() {
-                sections.push(listing("Open ends", &summary.open_ends, false, t));
-            }
-            if !summary.happened.is_empty() {
-                sections.push(listing("What happened", &summary.happened, true, t));
+                let mut ends = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .pt(px(10.))
+                    .border_t_1()
+                    .border_color(t.line)
+                    .text_size(px(text::SMALL))
+                    .text_color(t.ink2)
+                    .child(label("Open ends", t));
+                for end in summary.open_ends.iter().take(2) {
+                    ends = ends.child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(div().flex_shrink_0().text_color(t.ink3).child("–"))
+                            .child(div().flex_1().min_w(px(0.)).line_clamp(2).text_ellipsis().child(end.clone())),
+                    );
+                }
+                if summary.open_ends.len() > 2 {
+                    ends = ends.child(
+                        div()
+                            .pl(px(16.))
+                            .text_color(t.ink3)
+                            .child(format!("and {} more", summary.open_ends.len() - 2)),
+                    );
+                }
+                top = top.child(div().pt(px(4.)).child(ends));
             }
         }
 
         let resume = match self.copied {
-            Some("resume") => "Copied".to_string(),
-            _ => "Copy resume".to_string(),
-        };
-        let summary = match self.copied {
-            Some("summary") => "Copied",
-            _ => "Copy summary",
+            Some("resume") => "Copied",
+            _ => "Copy resume",
         };
         let actions = div()
             .flex()
             .flex_wrap()
-            .gap(px(8.))
+            .gap(px(6.))
             .child(
                 action("popover-resume", resume, "↵", true, t)
                     .on_click(cx.listener(|this, _, _, cx| this.copy_resume(cx))),
             )
             .child(
-                action("popover-open", "Open in window", ui::shortcut("O"), false, t)
+                action("popover-open", "Open", ui::shortcut("O"), false, t)
                     .on_click(cx.listener(|this, _, window, cx| this.open_in_window(window, cx))),
-            )
-            .child(
-                action("popover-summary", summary, ui::shortcut("C"), false, t)
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_summary(cx))),
             );
 
         // The summary scrolls if it is long; the buttons stay put below it.
@@ -644,16 +742,205 @@ impl Popover {
                         .size_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.detail_scroll)
-                        .flex()
-                        .flex_col()
-                        .gap(px(18.))
                         .pr(px(10.))
-                        .child(top)
-                        .children(sections),
+                        .child(top),
                 )
                 .children(ui::scrollbar(&self.detail_scroll, t)),
         )
         .child(actions)
+    }
+
+    /// The week at a glance: how much, on which days, from where, and what
+    /// was left open.
+    fn activity(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let week = &self.week;
+        let figure = |value: String, name: &'static str| {
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .px(px(11.))
+                .py(px(8.))
+                .rounded(px(8.))
+                .bg(t.fill)
+                .child(
+                    div()
+                        .text_size(px(text::LEAD))
+                        .line_height(px(20.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(value),
+                )
+                .child(div().text_size(px(text::CAPTION)).text_color(t.ink3).child(name))
+        };
+        let figures = div()
+            .flex()
+            .gap(px(8.))
+            .child(figure(self.today.to_string(), "sessions today"))
+            .child(figure(week.sessions.to_string(), "this week"))
+            .child(figure(duration_label(week.active_ms), "in use this week"))
+            .child(figure(compact_number(week.tokens), "tokens this week"));
+
+        // A bar a day, today on the right and picked out.
+        let busiest = week.buckets.iter().map(|b| b.sessions).max().unwrap_or(0).max(1);
+        let mut bars = div().h(px(76.)).flex().items_end().gap(px(6.));
+        for bucket in &week.buckets {
+            let share = bucket.sessions as f32 / busiest as f32;
+            let height = if bucket.sessions == 0 { 2. } else { (share * 36.).max(4.) };
+            bars = bars.child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .items_center()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .font_family(mono())
+                            .text_size(px(text::CAPTION))
+                            .text_color(t.ink3)
+                            .child(if bucket.sessions == 0 { String::new() } else { bucket.sessions.to_string() }),
+                    )
+                    .child(
+                        div()
+                            .w(px(22.))
+                            .h(px(height))
+                            .rounded(px(3.))
+                            .bg(if bucket.current { t.accent } else { t.ink3.opacity(0.45) }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::CAPTION))
+                            .text_color(if bucket.current { t.ink } else { t.ink3 })
+                            .child(if bucket.current {
+                                "today".to_string()
+                            } else {
+                                bucket.first_day.format("%a").to_string()
+                            }),
+                    ),
+            );
+        }
+
+        // Where the week's sessions came from.
+        let most = week.by_origin.first().map_or(1, |share| share.sessions.max(1));
+        let mut sources = div().flex_1().min_w(px(0.)).flex().flex_col().gap(px(6.)).child(label("By source", t));
+        for share in week.by_origin.iter().take(4) {
+            sources = sources.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(text::SMALL))
+                    .child(logo(share.origin, t, 13.))
+                    .child(div().w(px(64.)).flex_shrink_0().one_line().child(share.origin.name()))
+                    .child(
+                        div().flex_1().h(px(6.)).rounded(px(3.)).bg(t.fill).child(
+                            div()
+                                .h_full()
+                                .rounded(px(3.))
+                                .bg(t.ink3.opacity(0.6))
+                                .w(gpui::relative(share.sessions as f32 / most as f32)),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .w(px(22.))
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_end()
+                            .font_family(mono())
+                            .text_size(px(text::CAPTION))
+                            .text_color(t.ink3)
+                            .child(share.sessions.to_string()),
+                    ),
+            );
+        }
+        if week.by_origin.is_empty() {
+            sources = sources.child(div().text_size(px(text::SMALL)).text_color(t.ink3).child("No sessions this week."));
+        }
+
+        // What the week's summaries say is still to do; a click opens the
+        // session it came from.
+        let mut ends = div().flex_1().min_w(px(0.)).flex().flex_col().gap(px(4.)).child(label(
+            match week.open_ends.len() {
+                0 => "Open ends",
+                _ => "Open ends this week",
+            },
+            t,
+        ));
+        for (i, end) in week.open_ends.iter().take(2).enumerate() {
+            let key = end.key.clone();
+            let fill = t.fill;
+            ends = ends.child(
+                div()
+                    .id(("popover-open-end", i))
+                    .reachable(t)
+                    .flex()
+                    .flex_col()
+                    .px(px(6.))
+                    .py(px(3.))
+                    .mx(px(-6.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(fill))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let key = key.clone();
+                        this.close(window, cx);
+                        cx.defer(move |cx| {
+                            open_main(cx, Some(key));
+                        });
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(t.ink2)
+                            .line_clamp(1)
+                            .text_ellipsis()
+                            .child(end.text.clone()),
+                    )
+                    .child(
+                        div()
+                            .font_family(mono())
+                            .text_size(px(text::CAPTION))
+                            .text_color(t.ink3)
+                            .child(end.project.clone()),
+                    ),
+            );
+        }
+        if week.open_ends.is_empty() {
+            ends = ends.child(div().text_size(px(text::SMALL)).text_color(t.ink3).child("Nothing left open."));
+        } else if week.open_ends.len() > 2 {
+            ends = ends.child(
+                div()
+                    .text_size(px(text::CAPTION))
+                    .text_color(t.ink3)
+                    .child(format!("and {} more", week.open_ends.len() - 2)),
+            );
+        }
+
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .px(px(16.))
+            .py(px(12.))
+            .child(figures)
+            .child(bars)
+            .child(
+                div()
+                    .flex()
+                    .gap(px(24.))
+                    .pt(px(10.))
+                    .border_t_1()
+                    .border_color(t.line)
+                    .child(sources)
+                    .child(ends),
+            )
     }
 }
 
@@ -676,9 +963,9 @@ impl Render for Popover {
             .font_family(UI_FONT)
             .text_size(px(text::BODY))
             .line_height(px(20.))
-            .child(self.search_row(&t))
-            .child(
-                div()
+            .child(self.search_row(&t, cx))
+            .child(match self.view {
+                View::Recent => div()
                     .flex_1()
                     .min_h(px(0.))
                     .flex()
@@ -691,59 +978,32 @@ impl Render for Popover {
                             .children(ui::scrollbar(&self.scroll, &t)),
                     )
                     .child(self.detail(&t, cx)),
-            )
+                View::Activity => self.activity(&t, cx),
+            })
             .child(
                 div()
                     .flex_shrink_0()
                     .flex()
-                    .gap(px(20.))
-                    .px(px(18.))
-                    .py(px(9.))
+                    .gap(px(16.))
+                    .px(px(16.))
+                    .py(px(7.))
                     .border_t_1()
                     .border_color(t.line)
                     .font_family(mono())
                     .text_size(px(text::CAPTION))
                     .text_color(t.ink3)
-                    .child("↑↓ move")
-                    .child("type to search")
+                    .when(self.view == View::Recent, |el| {
+                        el.child("↑↓ move")
+                            .child(format!("{} copy summary", ui::shortcut("C")))
+                    })
+                    .child("←→ view")
                     .child("esc close")
                     .child(div().flex_1())
-                    .children((self.waiting > 0 && self.query.trim().is_empty()).then(|| {
-                        match self.waiting {
-                            1 => "1 newer session has no summary yet".to_string(),
-                            n => format!("{n} newer sessions have no summary yet"),
-                        }
+                    .children((self.view == View::Recent && self.waiting > 0 && self.query.trim().is_empty()).then(|| {
+                        format!("{} waiting for a summary", self.waiting)
                     })),
             )
     }
-}
-
-/// A titled list inside the summary: open ends as dashes, steps as numbers.
-fn listing(title: &'static str, lines: &[String], numbered: bool, t: &Theme) -> Div {
-    let mut list = div()
-        .flex()
-        .flex_col()
-        .gap(px(5.))
-        .pt(px(16.))
-        .border_t_1()
-        .border_color(t.line)
-        .child(label(title, t));
-    for (i, line) in lines.iter().enumerate() {
-        list = list.child(
-            div()
-                .flex()
-                .gap(px(8.))
-                .child(
-                    div()
-                        .w(px(16.))
-                        .flex_shrink_0()
-                        .text_color(t.ink3)
-                        .child(if numbered { format!("{}.", i + 1) } else { "–".to_string() }),
-                )
-                .child(div().flex_1().min_w(px(0.)).child(line.clone())),
-        );
-    }
-    list
 }
 
 /// One of the buttons under a session: a name and the key that does the same.
@@ -759,12 +1019,12 @@ fn action(
     div()
         .id(id)
         .reachable(t)
-        .h(px(36.))
-        .px(px(14.))
+        .h(px(30.))
+        .px(px(12.))
         .flex()
         .items_center()
-        .gap(px(10.))
-        .rounded(px(8.))
+        .gap(px(8.))
+        .rounded(px(7.))
         .text_size(px(text::SMALL))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
