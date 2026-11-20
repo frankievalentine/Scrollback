@@ -407,21 +407,8 @@ impl Popover {
     }
 
     fn search_row(&self, t: &Theme) -> Div {
-        let caret = ui::caret(self.caret_lit || self.typed_at.elapsed() < ui::CARET_BLINK, t);
-        let text = if self.query.is_empty() {
-            div().flex().items_center().gap(px(6.)).child(caret).child(
-                div()
-                    .text_color(t.ink3)
-                    .child("Search sessions"),
-            )
-        } else {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(1.))
-                .child(div().min_w(px(0.)).one_line().child(self.query.clone()))
-                .child(caret)
-        };
+        let lit = self.caret_lit || self.typed_at.elapsed() < ui::CARET_BLINK;
+        let text = ui::search_field(&self.query, "Search sessions", lit, t);
         div()
             .h(px(52.))
             .flex_shrink_0()

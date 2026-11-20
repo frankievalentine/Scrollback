@@ -922,23 +922,12 @@ impl Home {
         // It blinks, holds steady while keys are arriving, and is hidden in
         // a window that does not have the keyboard.
         let lit = self.window_active && (self.caret_lit || self.typed_at.elapsed() < ui::CARET_BLINK);
-        let caret = ui::caret(lit, t);
-        let text = if searching {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(1.))
-                .child(div().min_w(px(0.)).one_line().text_color(t.ink).child(self.query.clone()))
-                .child(caret)
-        } else {
-            div().flex().items_center().gap(px(6.)).child(caret).child(
-                div()
-                    .min_w(px(0.))
-                    .one_line()
-                    .text_color(t.ink3)
-                    .child("Type to search sessions, projects and messages"),
-            )
-        };
+        let text = ui::search_field(
+            &self.query,
+            "Search sessions, projects and messages",
+            lit,
+            t,
+        );
         // A filter narrows every search, so it is shown where the search is.
         let filter = self.filter_words().map(|words| {
             let fill = t.fill;

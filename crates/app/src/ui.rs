@@ -23,6 +23,37 @@ pub fn caret(lit: bool, t: &Theme) -> Div {
         .bg(if lit { t.accent } else { t.accent.opacity(0.) })
 }
 
+/// The inside of a search box: what has been typed with the caret after it,
+/// or the caret with the placeholder beside it when nothing has been.
+///
+/// Typed text and placeholder start at the same place, three pixels in, the
+/// room the caret takes when it stands in front. So the caret sits against
+/// the first letter of the placeholder, as it does in any text field, and
+/// the first typed character lands exactly where the placeholder began.
+pub fn search_field(query: &str, placeholder: &'static str, lit: bool, t: &Theme) -> Div {
+    let field = div().flex().items_center().gap(px(1.)).min_w(px(0.));
+    if query.is_empty() {
+        field.child(caret(lit, t)).child(
+            div()
+                .min_w(px(0.))
+                .one_line()
+                .text_color(t.ink3)
+                .child(placeholder),
+        )
+    } else {
+        field
+            .pl(px(3.))
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .one_line()
+                    .text_color(t.ink)
+                    .child(SharedString::from(query.to_string())),
+            )
+            .child(caret(lit, t))
+    }
+}
+
 /// Whether the keyboard is being used to move between controls. The focus
 /// ring is drawn only then, so clicking a button does not leave a ring on it.
 static KEYBOARD: AtomicBool = AtomicBool::new(false);
