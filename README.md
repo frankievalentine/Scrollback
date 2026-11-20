@@ -12,6 +12,11 @@ indexes it, and writes a summary beside each session,
 so you can find last Tuesday's work by what it was about instead of
 scrolling through transcripts.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/sessions-dark.png">
+  <img src="docs/screenshots/sessions-light.png" alt="Scrollback's session list, with a summary for each session">
+</picture>
+
 ## Features
 
 - **A small, fast native app.** Built in Rust with [GPUI](https://www.gpui.rs),
@@ -35,6 +40,35 @@ scrolling through transcripts.
   away, without opening the window.
 - **Read-only and local.** Scrollback never writes to your tools' files, and
   its index stays on your computer.
+
+## Screenshots
+
+The first time it opens, Scrollback shows which tools it found sessions for and asks how summaries should be written:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/intro-dark.png">
+  <img src="docs/screenshots/intro-light.png" alt="The first-run screen, listing the sources found">
+</picture>
+
+The menu bar popover: recent summaries, and the week at a glance.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/popover-recent-dark.png">
+  <img src="docs/screenshots/popover-recent-light.png" alt="The menu bar popover's recent sessions" width="420">
+</picture>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/popover-activity-dark.png">
+  <img src="docs/screenshots/popover-activity-light.png" alt="The menu bar popover's week of activity" width="420">
+</picture>
+
+With nothing found yet:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/empty-dark.png">
+  <img src="docs/screenshots/empty-light.png" alt="The session window with no sessions yet">
+</picture>
+
+All of the sessions shown are made up.
 
 ## Sources
 
