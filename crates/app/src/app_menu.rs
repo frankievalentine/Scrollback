@@ -27,6 +27,8 @@ actions!(
         ReadTranscript,
         CopyResume,
         WriteSummary,
+        FindInTranscript,
+        ExportSession,
     ]
 );
 
@@ -55,6 +57,8 @@ pub fn install(cx: &mut App) {
         KeyBinding::new("secondary-1", ShowSessions, None),
         KeyBinding::new("secondary-2", ShowActivity, None),
         KeyBinding::new("secondary-s", WriteSummary, None),
+        KeyBinding::new("secondary-f", FindInTranscript, None),
+        KeyBinding::new("secondary-shift-e", ExportSession, None),
     ];
     if cfg!(target_os = "macos") {
         // Hiding the app and minimising from the keyboard are Mac habits;
@@ -107,9 +111,11 @@ fn menus() -> Vec<Menu> {
             name: "Session".into(),
             items: vec![
                 MenuItem::action("Read Transcript", ReadTranscript),
+                MenuItem::action("Find in Transcript", FindInTranscript),
                 MenuItem::action("Copy Resume Command", CopyResume),
                 MenuItem::separator(),
                 MenuItem::action("Write Summary", WriteSummary),
+                MenuItem::action("Export as Markdown…", ExportSession),
             ],
         },
         Menu {

@@ -5,7 +5,10 @@ mod activity;
 mod first_run;
 mod reader;
 
-use crate::app_menu::{CopyResume, ReadTranscript, Reindex, ShowActivity, ShowSessions, WriteSummary};
+use crate::app_menu::{
+    CopyResume, ExportSession, FindInTranscript, ReadTranscript, Reindex, ShowActivity, ShowSessions,
+    WriteSummary,
+};
 use crate::chrome;
 use crate::settings::{self, Settings, Tab};
 use crate::theme::{text, claude_orange, Theme, mono, UI_FONT};
@@ -111,6 +114,8 @@ pub struct Home {
     measured: ui::Measured,
     /// Which menu is open, where the menus are drawn in the window.
     menu_open: Option<usize>,
+    /// A short message about something just done, such as an export.
+    notice: Option<String>,
     /// Whether the window is too narrow for the search box's key hints.
     narrow: bool,
     /// Whether the search caret is in the lit half of its blink.
@@ -189,6 +194,7 @@ impl Home {
             first_run_scroll: gpui::ScrollHandle::new(),
             measured: Default::default(),
             menu_open: chrome::open_at_launch(),
+            notice: None,
             narrow: false,
             caret_lit: true,
             typed_at: Instant::now(),
@@ -290,10 +296,11 @@ impl Home {
     /// What the view is showing, for the development key-press log.
     pub fn dev_state(&self) -> String {
         format!(
-            "first_run={} view={} reading={} query={:?} sessions={} messages={} selected={:?}",
+            "first_run={} view={} reading={} {}query={:?} sessions={} messages={} selected={:?}",
             self.first_run,
             if self.view == View::Activity { "activity" } else { "sessions" },
             self.reading.is_some(),
+            self.reading.as_ref().map(|r| r.dev_state()).unwrap_or_default(),
             self.query,
             self.hits.len(),
             self.message_hits.len(),
@@ -617,6 +624,59 @@ impl Home {
                 this.copy_resume(cx);
             }
         }))
+        .on_action(cx.listener(|this, _: &FindInTranscript, _, cx| {
+            if this.first_run || this.view != View::Sessions {
+                return;
+            }
+            // From the list, find opens the selected session to search it.
+            if this.reading.is_none() {
+                this.open_transcript(cx);
+            }
+            this.open_find(cx);
+        }))
+        .on_action(cx.listener(|this, _: &ExportSession, _, cx| {
+            if !this.first_run && this.view == View::Sessions {
+                this.export_selected(cx);
+            }
+        }))
+    }
+
+    /// Write the selected session out as Markdown, to a file the person
+    /// picks, then show it.
+    fn export_selected(&mut self, cx: &mut Context<Self>) {
+        let index = match &self.reading {
+            Some(reading) => reading.index,
+            None => match self.selected_session() {
+                Some(index) => index,
+                None => return,
+            },
+        };
+        let session = self.sessions[index].clone();
+        let folder = dirs_downloads();
+        let chosen = cx.prompt_for_new_path(&folder, Some(&scrollback_core::export::file_name(&session)));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = chosen.await else { return };
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let text = scrollback_core::export::markdown(&session)?;
+                    std::fs::write(&path, text)?;
+                    anyhow::Ok(path)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match written {
+                    Ok(path) => {
+                        this.notice = Some(format!("Exported to {}", path.display()));
+                        cx.reveal_path(&path);
+                    }
+                    Err(err) => this.notice = Some(format!("Could not export: {err:#}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -643,6 +703,10 @@ impl Home {
         let keystroke = &event.keystroke;
         let mods = keystroke.modifiers;
         if self.reading.is_some() {
+            // While finding, keys type into the find field.
+            if self.find_key(keystroke, cx) {
+                return;
+            }
             // The reader has its own small set of keys; typing does nothing.
             match keystroke.key.as_str() {
                 "escape" | "left" => self.close_transcript(cx),
@@ -876,6 +940,7 @@ impl Home {
                     .line_height(px(17.))
                     .text_color(t.ink3)
                     .child(self.status.clone())
+                    .children(self.notice.clone())
                     .children(self.summary_status()),
             )
     }
@@ -1942,6 +2007,17 @@ fn resume_for(session: &Session, powershell: bool) -> String {
 // `App` is only named in signatures GPUI infers; keep the import honest.
 #[allow(dead_code)]
 fn _uses(_: &App) {}
+
+/// Where exports are offered to go: Downloads, if there is one.
+fn dirs_downloads() -> std::path::PathBuf {
+    let home = scrollback_core::home();
+    let downloads = home.join("Downloads");
+    if downloads.is_dir() {
+        downloads
+    } else {
+        home
+    }
+}
 
 #[cfg(test)]
 mod tests {

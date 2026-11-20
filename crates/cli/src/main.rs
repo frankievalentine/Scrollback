@@ -23,6 +23,8 @@ Usage:
   scrollback summarize <query>     Write or rewrite the summary of the best match
   scrollback show <query>          Print the summary of the best match
   scrollback preview <query>       Print exactly what `summarize` would send
+  scrollback export <query> [-o F] Write the best match out as Markdown, to F
+                                   or to standard output
 ";
 
 fn main() -> Result<()> {
@@ -40,6 +42,7 @@ fn main() -> Result<()> {
     let active = take_flag(&mut args, "--active");
     let redo = take_flag(&mut args, "--redo");
     let ungrouped = take_flag(&mut args, "--ungrouped");
+    let output = take_value(&mut args, "-o")?;
 
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
@@ -64,6 +67,21 @@ fn main() -> Result<()> {
         "preview" => {
             let session = best_match(&args[1..].join(" "))?;
             println!("{}", summarize::preview(&session)?);
+            Ok(())
+        }
+        "export" => {
+            if args.len() < 2 {
+                bail!("give a few words to pick a session, for example: scrollback export runyard redesign");
+            }
+            let session = best_match(&args[1..].join(" "))?;
+            let text = scrollback_core::export::markdown(&session)?;
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, text)?;
+                    eprintln!("Wrote {path}");
+                }
+                None => print!("{text}"),
+            }
             Ok(())
         }
         "" | "help" | "--help" | "-h" => {

@@ -6,6 +6,7 @@ mod app_menu;
 mod background;
 mod chrome;
 mod home;
+mod login;
 mod markdown;
 mod popover;
 mod settings;
@@ -127,7 +128,10 @@ fn open_main_with(
 
 fn main() {
     // `scrollback-app some words` opens with that search already typed.
-    let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    // A start at login is marked, and opens in the menu bar alone.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let at_login = args.iter().any(|arg| arg == login::AT_LOGIN);
+    let query = args.into_iter().filter(|arg| arg != login::AT_LOGIN).collect::<Vec<_>>().join(" ");
 
     let app = Application::new().with_assets(Assets);
     // Clicking the Dock icon when the window is closed brings it back.
@@ -141,11 +145,22 @@ fn main() {
         popover::install(cx);
         cx.set_global(MainWindow(None));
 
-        let opened = open_main_with(cx, None, query).expect("opening the main window");
-
         // With the icon in the menu bar the app outlives its window. Without
         // the icon, closing the last window quits, as before.
         tray::install(cx);
+        // Started at login with the icon showing, the app waits there; the
+        // index is still brought up to date and summaries still written.
+        if at_login && tray::showing(cx) {
+            background::start(cx);
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() && !tray::showing(cx) {
+                    cx.quit();
+                }
+            })
+            .detach();
+            return;
+        }
+        let opened = open_main_with(cx, None, query).expect("opening the main window");
         background::start(cx);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() && !tray::showing(cx) {

@@ -108,6 +108,10 @@ pub struct SettingsView {
     focus: FocusHandle,
     /// Never set: this window has no menus, only the bar they would sit in.
     menu_open: Option<usize>,
+    /// Whether Scrollback starts at login, as the system has it.
+    at_login: bool,
+    /// Why the last change to that failed.
+    login_error: Option<String>,
 }
 
 impl SettingsView {
@@ -126,6 +130,8 @@ impl SettingsView {
             measured: Default::default(),
             focus: cx.focus_handle(),
             menu_open: None,
+            at_login: crate::login::enabled(),
+            login_error: None,
         }
     }
 
@@ -163,6 +169,7 @@ impl SettingsView {
         let in_menu_bar = self.config.menu_bar_icon;
         let quiet = self.config.quiet_minutes;
         let live = self.config.live_summaries;
+        let at_login = self.at_login;
         let mac = cfg!(target_os = "macos");
         let mut wait = segmented(t);
         for minutes in QUIET_MINUTES {
@@ -227,6 +234,26 @@ impl SettingsView {
                 ),
                 t,
             ))
+            .child(row(
+                "Open at login",
+                "Start Scrollback when you log in. With the icon on, it starts there \
+                 without opening its window.",
+                switch("at-login", at_login, t).on_click(cx.listener(move |this, _, _, cx| {
+                    match crate::login::set(!at_login) {
+                        Ok(()) => this.login_error = None,
+                        Err(err) => this.login_error = Some(err),
+                    }
+                    this.at_login = crate::login::enabled();
+                    cx.notify();
+                })),
+                t,
+            ))
+            .children(self.login_error.as_ref().map(|err| {
+                div()
+                    .text_size(px(text::SMALL))
+                    .text_color(t.ink2)
+                    .child(format!("Could not change this: {err}"))
+            }))
     }
 
     fn sources(&self, t: &Theme, cx: &mut Context<Self>) -> Div {

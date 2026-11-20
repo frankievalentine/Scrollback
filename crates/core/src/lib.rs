@@ -4,6 +4,7 @@
 
 pub mod activity;
 pub mod config;
+pub mod export;
 pub mod model;
 pub mod search;
 pub mod sources;

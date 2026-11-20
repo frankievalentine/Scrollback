@@ -38,6 +38,16 @@ enum Line {
     Block(usize),
 }
 
+/// Finding text in the open transcript.
+#[derive(Default)]
+struct Find {
+    query: String,
+    /// Blocks holding the text, in order.
+    matches: Vec<usize>,
+    /// Which of them is showing.
+    current: usize,
+}
+
 pub(super) struct Reading {
     /// Index into `Home::sessions`.
     pub index: usize,
@@ -60,6 +70,8 @@ pub(super) struct Reading {
     parsed: RefCell<HashMap<usize, Rc<Vec<markdown::Node>>>>,
     lines: Vec<Line>,
     list: ListState,
+    /// The find field, while it is open.
+    find: Option<Find>,
 }
 
 impl Reading {
@@ -76,6 +88,7 @@ impl Reading {
             parsed: RefCell::new(HashMap::new()),
             lines: vec![Line::Head, Line::Status],
             list: ListState::new(2, ListAlignment::Top, px(1200.)),
+            find: None,
         }
     }
 
@@ -135,6 +148,65 @@ impl Reading {
         self.lines
             .iter()
             .position(|line| matches!(line, Line::Block(i) if *i == block))
+    }
+
+    /// The find field's state, for the development key-press log.
+    pub(super) fn dev_state(&self) -> String {
+        match &self.find {
+            None => String::new(),
+            Some(find) => format!(
+                "find={:?} matches={} current={} focus={:?} ",
+                find.query,
+                find.matches.len(),
+                find.current,
+                self.focus
+            ),
+        }
+    }
+
+    /// Look for the find text again, and show the first match.
+    fn search(&mut self) {
+        let Some(find) = self.find.as_mut() else { return };
+        let needle = find.query.trim().to_lowercase();
+        find.matches.clear();
+        find.current = 0;
+        if !needle.is_empty() {
+            if let Some(blocks) = &self.blocks {
+                find.matches = blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, block)| block_text(block).to_lowercase().contains(&needle))
+                    .map(|(i, _)| i)
+                    .collect();
+            }
+        }
+        self.show_match();
+    }
+
+    /// Bring the current match into view, opening the step it is in, and
+    /// mark it.
+    fn show_match(&mut self) {
+        let block = self.find.as_ref().and_then(|find| find.matches.get(find.current).copied());
+        let previous = std::mem::replace(&mut self.focus, block);
+        let Some(block) = block else {
+            if let Some(line) = previous.and_then(|b| self.line_of_block(b)) {
+                self.list.splice(line..line + 1, 1);
+            }
+            return;
+        };
+        if let Some(step) = self.steps.iter().position(|step| step.blocks.contains(&block)) {
+            if !self.open.contains(&step) {
+                self.toggle_step(step);
+            }
+        }
+        for marked in [previous, Some(block)].into_iter().flatten() {
+            if let Some(line) = self.line_of_block(marked) {
+                self.list.splice(line..line + 1, 1);
+            }
+        }
+        if let Some(line) = self.line_of_block(block) {
+            self.list.scroll_to(ListOffset { item_ix: line, offset_in_item: px(0.) });
+        }
     }
 
     /// Open or close one step, leaving the rest of the list where it is.
@@ -231,6 +303,18 @@ fn step_facts(blocks: &[Block]) -> String {
     parts.join(" · ")
 }
 
+/// A block's words, for finding in.
+fn block_text(block: &Block) -> String {
+    match block {
+        Block::Prompt(text) | Block::Reply(text) | Block::Note(text) => text.clone(),
+        Block::Tools(calls) => calls
+            .iter()
+            .map(|(name, target)| format!("{name} {}", target.as_deref().unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
 fn read_blocks(session: &scrollback_core::Session) -> anyhow::Result<Vec<Block>> {
     Ok(transcript::blocks(transcript::events(session)?))
 }
@@ -305,6 +389,62 @@ impl Home {
         }
     }
 
+    /// Open the find field, or keep it open, in the transcript view.
+    pub(super) fn open_find(&mut self, cx: &mut Context<Self>) {
+        if let Some(reading) = self.reading.as_mut() {
+            if reading.find.is_none() {
+                reading.find = Some(Find::default());
+            }
+            cx.notify();
+        }
+    }
+
+    /// Keys while the find field is open: typing, moving between matches,
+    /// and closing it. Returns whether the key was the field's.
+    pub(super) fn find_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some(reading) = self.reading.as_mut() else { return false };
+        let Some(find) = reading.find.as_mut() else { return false };
+        let mods = keystroke.modifiers;
+        match keystroke.key.as_str() {
+            "escape" => {
+                reading.find = None;
+                reading.show_match();
+            }
+            "enter" | "down" | "up" => {
+                let count = find.matches.len();
+                if count > 0 {
+                    let back = mods.shift || keystroke.key == "up";
+                    find.current = match back {
+                        true => (find.current + count - 1) % count,
+                        false => (find.current + 1) % count,
+                    };
+                    reading.show_match();
+                }
+            }
+            "backspace" => {
+                if mods.secondary() || mods.alt {
+                    find.query.clear();
+                } else {
+                    find.query.pop();
+                }
+                reading.search();
+            }
+            _ => {
+                if mods.secondary() || mods.control || mods.function {
+                    return false;
+                }
+                let Some(typed) = keystroke.key_char.as_deref() else { return true };
+                if typed.is_empty() || typed.chars().any(char::is_control) {
+                    return true;
+                }
+                find.query.push_str(typed);
+                reading.search();
+            }
+        }
+        cx.notify();
+        true
+    }
+
     pub(super) fn close_transcript(&mut self, cx: &mut Context<Self>) {
         self.reading = None;
         cx.notify();
@@ -373,9 +513,58 @@ impl Home {
         };
         let fill = t.fill;
         let keys = if reading.steps.is_empty() {
-            "esc back   ↵ copy resume"
+            format!("esc back   {} find   ↵ copy resume", crate::ui::shortcut("F"))
         } else {
-            "esc back   [ ] step   o open   ↵ copy resume"
+            format!("esc back   [ ] step   o open   {} find   ↵ copy resume", crate::ui::shortcut("F"))
+        };
+        let right: AnyElement = match &reading.find {
+            None => div()
+                .font_family(mono())
+                .text_size(px(text::CAPTION))
+                .text_color(t.ink3)
+                .child(keys)
+                .into_any_element(),
+            Some(find) => {
+                let lit = self.window_active && (self.caret_lit || self.typed_at.elapsed() < crate::ui::CARET_BLINK);
+                let count = match (find.query.trim().is_empty(), find.matches.len()) {
+                    (true, _) => String::new(),
+                    (false, 0) => "no matches".to_string(),
+                    (false, n) => format!("{} of {n}", find.current + 1),
+                };
+                div()
+                    .w(px(420.))
+                    .h(px(32.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .rounded(px(8.))
+                    .bg(t.fill)
+                    .text_size(px(text::SMALL))
+                    .child(div().flex_1().min_w(px(0.)).child(crate::ui::search_field(
+                        &find.query,
+                        "Find in this session",
+                        lit,
+                        t,
+                    )))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_family(mono())
+                            .text_size(px(text::CAPTION))
+                            .text_color(t.ink3)
+                            .child(count),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_family(mono())
+                            .text_size(px(text::CAPTION))
+                            .text_color(t.ink3)
+                            .child("↵ next  esc close"),
+                    )
+                    .into_any_element()
+            }
         };
         div()
             .flex_1()
@@ -406,13 +595,7 @@ impl Home {
                                 .on_click(cx.listener(|this, _, _, cx| this.close_transcript(cx)))
                                 .child("‹  Sessions"),
                         )
-                        .child(
-                            div()
-                                .font_family(mono())
-                                .text_size(px(text::CAPTION))
-                                .text_color(t.ink3)
-                                .child(keys),
-                        ),
+                        .child(right),
                 ),
             )
             .child(
