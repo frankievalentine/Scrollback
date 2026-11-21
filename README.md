@@ -125,7 +125,7 @@ choose More info, then Run anyway.
 
 ### Updates
 
-From the first release after 0.1.2, Scrollback keeps itself up to date. Shortly after it
+From the first release after 0.1.3, Scrollback keeps itself up to date. Shortly after it
 starts, and every six hours while it runs, it asks GitHub which version is
 the latest; nothing else is sent. When there is a newer one it downloads it,
 checks it against the checksums published with the release, and shows
@@ -139,7 +139,7 @@ checks it against the checksums published with the release, and shows
 | The .deb, or the Windows zip | Says a new version is out and links to it |
 
 **Check for Updates…** in the menu looks straight away, and Settings → About
-can turn the automatic checks off. Versions up to 0.1.2 have no updater;
+can turn the automatic checks off. Versions up to 0.1.3 have no updater;
 update those once by hand.
 
 ## Summaries
