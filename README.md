@@ -123,6 +123,25 @@ xattr -dr com.apple.quarantine /Applications/Scrollback.app
 **First launch on Windows.** SmartScreen may warn about an unrecognised app;
 choose More info, then Run anyway.
 
+### Updates
+
+From the first release after 0.1.2, Scrollback keeps itself up to date. Shortly after it
+starts, and every six hours while it runs, it asks GitHub which version is
+the latest; nothing else is sent. When there is a newer one it downloads it,
+checks it against the checksums published with the release, and shows
+**Restart to update** in the sidebar and in Settings → About.
+
+| Installed from | How it updates |
+| --- | --- |
+| The macOS zip | Replaces the app where it is and opens it again |
+| The Windows installer | Runs the new installer quietly and opens it again |
+| The Linux tarball, with `install.sh` | Installs over the same place and opens it again |
+| The .deb, or the Windows zip | Says a new version is out and links to it |
+
+**Check for Updates…** in the menu looks straight away, and Settings → About
+can turn the automatic checks off. Versions up to 0.1.2 have no updater;
+update those once by hand.
+
 ## Summaries
 
 Choose who writes them in Settings → Summaries:

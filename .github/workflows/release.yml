@@ -88,6 +88,10 @@ jobs:
         with:
           path: packages
           merge-multiple: true
+      # Scrollback checks each update against these before installing it.
+      - name: List the packages' checksums
+        working-directory: packages
+        run: sha256sum * > SHA256SUMS
       - name: Create a draft release with the packages
         env:
           GH_TOKEN: ${{ github.token }}

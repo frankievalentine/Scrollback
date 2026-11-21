@@ -13,6 +13,7 @@ pub mod sources;
 pub mod store;
 pub mod summarize;
 pub mod transcript;
+pub mod update;
 
 pub use activity::Activity;
 pub use config::{Config, QUIET_MINUTES};

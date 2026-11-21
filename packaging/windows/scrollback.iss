@@ -52,3 +52,6 @@ Name: "{autodesktop}\Scrollback"; Filename: "{app}\scrollback-app.exe"; Tasks: d
 
 [Run]
 Filename: "{app}\scrollback-app.exe"; Description: "Open Scrollback"; Flags: nowait postinstall skipifsilent
+; When Scrollback updates itself it runs this silently, then expects to be
+; opened again.
+Filename: "{app}\scrollback-app.exe"; Flags: nowait; Check: WizardSilent

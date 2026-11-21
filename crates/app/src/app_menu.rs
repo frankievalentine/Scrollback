@@ -12,6 +12,7 @@ actions!(
     scrollback,
     [
         About,
+        CheckForUpdates,
         OpenSettings,
         Hide,
         HideOthers,
@@ -39,6 +40,10 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
     cx.on_action(|_: &OpenSettings, cx| settings::open(cx, Tab::General));
     cx.on_action(|_: &About, cx| settings::open(cx, Tab::About));
+    cx.on_action(|_: &CheckForUpdates, cx| {
+        settings::open(cx, Tab::About);
+        crate::updates::check_now(cx);
+    });
     cx.on_action(|_: &ShowWindow, cx| {
         crate::open_main(cx, None);
     });
@@ -92,6 +97,7 @@ fn menus() -> Vec<Menu> {
             name: "Scrollback".into(),
             items: vec![
                 MenuItem::action("About Scrollback", About),
+                MenuItem::action("Check for Updates…", CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
@@ -139,7 +145,10 @@ fn menus() -> Vec<Menu> {
     } else {
         Menu {
             name: "Help".into(),
-            items: vec![MenuItem::action("About Scrollback", About)],
+            items: vec![
+                MenuItem::action("Check for Updates…", CheckForUpdates),
+                MenuItem::action("About Scrollback", About),
+            ],
         }
     });
     menus
