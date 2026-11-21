@@ -138,6 +138,7 @@ impl SettingsView {
     fn new(tab: Tab, window: &mut Window, cx: &mut Context<Self>) -> SettingsView {
         // The session window can change settings too (its auto-summarise
         // switch, the first-run answer), so follow them here as well.
+        cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify()).detach();
         cx.observe_global::<Settings>(|this, cx| {
             this.config = cx.global::<Settings>().0.clone();
             cx.notify();
@@ -735,7 +736,68 @@ impl SettingsView {
         }))
     }
 
-    fn about(&self, t: &Theme) -> Div {
+    /// Where updates stand, and what can be done about them.
+    fn updates(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        use crate::updates::State;
+        let state = crate::updates::state(cx);
+        let auto = self.config.check_updates;
+        let action: Option<(&'static str, bool)> = match &state {
+            State::Ready(..) => Some(("Restart to update", true)),
+            State::Available(_) | State::Downloading(_) => Some(("See what's new", false)),
+            State::Checking | State::Installing(_) => None,
+            _ => Some(("Check now", false)),
+        };
+        let mut line = div().flex().items_center().gap(px(12.)).child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .text_size(px(text::SMALL))
+                .line_height(px(19.))
+                .text_color(if matches!(state, State::Failed(_)) { t.ink } else { t.ink2 })
+                .child(crate::updates::describe(&state)),
+        );
+        if let Some((name, primary)) = action {
+            let button = if primary {
+                div()
+                    .id("update-action")
+                    .reachable(t)
+                    .h(px(30.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(7.))
+                    .bg(t.accent)
+                    .text_color(t.on_accent)
+                    .text_size(px(text::SMALL))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.9))
+                    .child(name)
+            } else {
+                button("update-action", name, t)
+            };
+            line = line.child(button.flex_shrink_0().on_click(cx.listener(|_, _, _, cx| crate::updates::act(cx))));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .pt(px(18.))
+            .border_t_1()
+            .border_color(t.line)
+            .child(label("Updates", t))
+            .child(line)
+            .child(row(
+                "Check for updates automatically",
+                "Look for a newer version every few hours, and download it to install when \
+                 Scrollback next restarts. Only asks GitHub which version is latest.",
+                switch("check-updates", auto, t)
+                    .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.check_updates = !auto))),
+                t,
+            ))
+    }
+
+    fn about(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let index = scrollback_core::data_dir().join("index.db");
         page()
             .child(
@@ -795,6 +857,7 @@ impl SettingsView {
                             .child("Scrollback reads session files where they are and never writes to them."),
                     ),
             )
+            .child(self.updates(t, cx))
     }
 }
 
@@ -829,7 +892,7 @@ impl Render for SettingsView {
             Tab::General => self.general(&t, cx),
             Tab::Sources => self.sources(&t, cx),
             Tab::Summaries => self.summaries(&t, cx),
-            Tab::About => self.about(&t),
+            Tab::About => self.about(&t, cx),
         };
         let bar = chrome::bar("Settings", false, None, window, cx, &t);
         let root = div()

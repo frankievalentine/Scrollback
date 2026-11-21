@@ -13,3 +13,4 @@ chrono.workspace = true
 nucleo-matcher.workspace = true
 ureq = { version = "3", features = ["json"] }
 keyring = "4"
+sha2 = "0.10"

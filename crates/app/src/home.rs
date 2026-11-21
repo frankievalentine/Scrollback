@@ -165,6 +165,7 @@ impl Home {
     ) -> Home {
         let config = cx.global::<Settings>().0.clone();
         cx.observe_global::<Settings>(|this, cx| this.settings_changed(cx)).detach();
+        cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify()).detach();
         // Development aids: `SCROLLBACK_FIRST_RUN=1` shows the first-run
         // screen again and `=0` skips it without saving anything, and
         // `SCROLLBACK_NO_CLAUDE=1` behaves as if the `claude` command were
@@ -918,6 +919,21 @@ impl Home {
                     // In the sidebar's own margin, clear of the counts.
                     .children(ui::scrollbar(&self.sidebar_scroll, t).map(|bar| bar.right(px(-7.)))),
             )
+            // A newer version: ready to install, or out to fetch by hand.
+            .children(crate::updates::pending(cx).map(|(release, ready)| {
+                nav_row(t, false)
+                    .id("update")
+                    .on_click(cx.listener(|_, _, _, cx| crate::updates::act(cx)))
+                    .tooltip(ui::tip(if ready {
+                        format!("Install Scrollback {} and open it again", release.version)
+                    } else {
+                        format!("See what is new in Scrollback {}", release.version)
+                    }))
+                    .text_color(t.accent)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(div().flex_1().child(if ready { "Restart to update" } else { "Update available" }))
+                    .child(trailing(release.version.clone(), t).text_color(t.accent))
+            }))
             .child(
                 nav_row(t, false)
                     .id("open-settings")

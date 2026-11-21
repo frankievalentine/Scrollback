@@ -52,6 +52,10 @@ pub struct Config {
     /// Cloudflare: the AI Gateway to route through, if any.
     #[serde(default)]
     pub cloudflare_gateway: String,
+    /// Look for a newer release now and then, and download it to install
+    /// on the next restart.
+    #[serde(default = "yes")]
+    pub check_updates: bool,
     /// `system`, `light` or `dark`.
     #[serde(default = "system")]
     pub theme: String,
@@ -99,6 +103,7 @@ impl Default for Config {
             endpoint_urls: BTreeMap::new(),
             endpoint_models: BTreeMap::new(),
             cloudflare_gateway: String::new(),
+            check_updates: true,
             theme: system(),
             hidden_sources: Vec::new(),
             folders: BTreeMap::new(),

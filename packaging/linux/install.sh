@@ -21,7 +21,10 @@ if [ "${1:-}" = "--remove" ]; then
 else
     for file in $files; do
         mkdir -p "$(dirname "$prefix/$file")"
-        cp "$here/$file" "$prefix/$file"
+        # Copied beside it and renamed over it, so a copy that is running
+        # (as when Scrollback updates itself) is replaced, not overwritten.
+        cp "$here/$file" "$prefix/$file.new"
+        mv -f "$prefix/$file.new" "$prefix/$file"
     done
     # The launcher names the program by its full path, so it works whether
     # or not this prefix is on the PATH.

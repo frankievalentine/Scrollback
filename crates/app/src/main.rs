@@ -14,6 +14,7 @@ mod settings;
 mod theme;
 mod tray;
 mod ui;
+mod updates;
 
 use gpui::{
     prelude::*, px, size, App, Application, AssetSource, Bounds, Global, SharedString,
@@ -142,6 +143,7 @@ fn main() {
     app.run(move |cx: &mut App| {
         theme::choose_fonts(cx);
         settings::install(cx);
+        updates::start(cx);
         app_menu::install(cx);
         popover::install(cx);
         cx.set_global(MainWindow(None));
