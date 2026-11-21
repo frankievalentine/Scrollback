@@ -17,6 +17,20 @@ scrolling through transcripts.
   <img src="docs/screenshots/sessions-light.png" alt="Scrollback's session list, with a summary for each session">
 </picture>
 
+## Upcoming
+
+What is being worked on now, for the next releases:
+
+- **Sessions from your other machines.** Your other computers' sessions,
+  summaries and messages in the same list and search, labelled with the
+  machine they ran on: through iCloud Drive or any folder your computers keep
+  in sync, or over Tailscale for a machine without one, such as a devbox. See
+  [Across machines](#across-machines).
+- **SSH addresses in Settings.** Choose how each machine is reached when
+  resuming one of its sessions, instead of editing the settings file.
+- **Summaries on request.** Ask another machine to summarise one of its
+  sessions, when its owner allows it.
+
 ## Features
 
 - **A small, fast native app.** Built in Rust with [GPUI](https://www.gpui.rs).
@@ -39,8 +53,6 @@ scrolling through transcripts.
   used, and the open ends still waiting.
 - **Menu bar popover.** Recent summaries and the week's activity, a click
   away, without opening the window.
-- **Across machines.** Sessions from your other computers, through iCloud
-  Drive or any folder they keep in sync, labelled with the machine they ran on.
 - **Read-only and local.** Scrollback never writes to your tools' files, and
   its index stays on your computer. Nothing leaves it unless you turn on
   syncing.
@@ -155,6 +167,8 @@ Smaller local models write rougher summaries than Haiku, and sometimes miss
 where each step began; the summary is still kept when they do.
 
 ## Across machines
+
+*Coming in the next release.*
 
 Turn on syncing in Settings → Machines on each computer:
 
