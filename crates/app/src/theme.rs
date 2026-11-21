@@ -18,6 +18,17 @@ pub struct Theme {
     pub ink3: Hsla,
     pub accent: Hsla,
     pub on_accent: Hsla,
+    /// The caution colour, for a machine that is away: its dot and icon,
+    /// text on its tint, the tint, and the tint's edge.
+    pub caution: Hsla,
+    pub caution_ink: Hsla,
+    pub caution_fill: Hsla,
+    pub caution_line: Hsla,
+    /// A machine that is in touch.
+    pub ok: Hsla,
+    /// The chip naming another machine on a session's card.
+    pub chip_fill: Hsla,
+    pub chip_ink: Hsla,
     pub card_shadow: Vec<BoxShadow>,
 }
 
@@ -128,6 +139,13 @@ impl Theme {
             ink3: rgb(0x5C5F66).into(),
             accent: rgb(0x3B5BDB).into(),
             on_accent: rgb(0xFFFFFF).into(),
+            caution: rgb(0xD9822B).into(),
+            caution_ink: rgb(0x8A4500).into(),
+            caution_fill: rgb(0xFFF4E5).into(),
+            caution_line: rgb(0xF3CF96).into(),
+            ok: rgb(0x3FA66B).into(),
+            chip_fill: rgb(0xE8ECFB).into(),
+            chip_ink: rgb(0x2C47B8).into(),
             // A hairline edge and a soft, short lift: enough to set the
             // selected card apart on a light page without a heavy cast.
             // A hairline edge and a soft lift, kept short so the page under
@@ -154,6 +172,13 @@ impl Theme {
             ink3: rgb(0xA3A6AD).into(),
             accent: rgb(0x8AA4FF).into(),
             on_accent: rgb(0x131416).into(),
+            caution: rgb(0xE59A4A).into(),
+            caution_ink: rgb(0xF2C084).into(),
+            caution_fill: rgb(0x2A2117).into(),
+            caution_line: rgb(0x55401F).into(),
+            ok: rgb(0x4CC27F).into(),
+            chip_fill: rgb(0x252C45).into(),
+            chip_ink: rgb(0xAFC0FF).into(),
             card_shadow: vec![
                 shadow(0x00000099, 0., 0., 1.),
                 shadow(0x00000066, 2., 4., 0.),

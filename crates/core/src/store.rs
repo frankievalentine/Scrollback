@@ -133,6 +133,18 @@ impl Store {
                  tokenize = 'trigram'
              )",
         )?;
+        // Other machines' messages, when they share them: matched by whole
+        // words, which takes about a quarter of the room.
+        db.execute_batch(
+            "create virtual table if not exists remote_messages using fts5(
+                 text, key unindexed, block unindexed, role unindexed,
+                 tokenize = 'unicode61 remove_diacritics 2'
+             );
+             create table if not exists remote_indexed (
+                 key text primary key,
+                 updated_ms integer not null
+             );",
+        )?;
         let has_messages_time = db
             .prepare("select 1 from pragma_table_info('sessions') where name = 'messages_for_ms'")?
             .exists([])?;
@@ -244,6 +256,7 @@ impl Store {
                 summary_stale: summary.is_some() && summary_for_ms.unwrap_or(0) < updated_ms,
                 summary_for_ms: summary.as_ref().and(summary_for_ms),
                 summary,
+                machine: None,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -256,6 +269,25 @@ impl Store {
             params![serde_json::to_string(summary)?, session.updated_ms, session.key()],
         )?;
         Ok(())
+    }
+
+    /// Put back summaries kept elsewhere, for sessions that have none: each
+    /// is `(key, summary, the activity it covers)`. Returns how many were
+    /// put back.
+    pub fn restore_summaries(&mut self, kept: &[(String, Summary, i64)]) -> Result<usize> {
+        let tx = self.db.transaction()?;
+        let mut restored = 0;
+        {
+            let mut put = tx.prepare(
+                "update sessions set summary = ?1, summary_for_ms = ?2
+                 where key = ?3 and summary is null",
+            )?;
+            for (key, summary, covered_ms) in kept {
+                restored += put.execute(params![serde_json::to_string(summary)?, covered_ms, key])?;
+            }
+        }
+        tx.commit()?;
+        Ok(restored)
     }
 
     /// The paragraph last written for an activity period. `scope` names the
@@ -546,6 +578,16 @@ impl Store {
     /// Messages containing every word of `query` (words of three or more
     /// characters; shorter ones are ignored), best matches first.
     pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageHit>> {
+        self.search_in(query, limit, true)
+    }
+
+    /// Like `search_messages`, over this machine's own messages only: what
+    /// another machine is given when it asks over Tailscale.
+    pub fn search_own_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageHit>> {
+        self.search_in(query, limit, false)
+    }
+
+    fn search_in(&self, query: &str, limit: usize, with_remote: bool) -> Result<Vec<MessageHit>> {
         let terms: Vec<String> = query
             .split_whitespace()
             .filter(|term| term.chars().count() >= 3)
@@ -554,26 +596,38 @@ impl Store {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
-        let expression = terms
-            .iter()
-            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        let mut stmt = self.db.prepare(
-            "select key, block, role, text from messages
-             where messages match ?1 order by rank limit ?2",
-        )?;
-        let rows = stmt.query_map(params![expression, limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?;
+        let expression = |suffix: &str| {
+            terms
+                .iter()
+                .map(|term| format!("\"{}\"{suffix}", term.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        };
+        let mut found = Vec::new();
+        // Words from other machines match from their start.
+        let mut tables = vec![("messages", expression(""))];
+        if with_remote {
+            tables.push(("remote_messages", expression("*")));
+        }
+        for (table, expression) in tables {
+            let mut stmt = self.db.prepare(&format!(
+                "select key, block, role, text from {table}
+                 where {table} match ?1 order by rank limit ?2"
+            ))?;
+            let rows = stmt.query_map(params![expression, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows {
+                found.push(row?);
+            }
+        }
         let mut hits = Vec::new();
-        for row in rows {
-            let (key, block, role, text) = row?;
+        for (key, block, role, text) in found.into_iter().take(limit) {
             let (snippet, matches) = snippet(&text, &terms);
             hits.push(MessageHit {
                 key,
@@ -584,6 +638,56 @@ impl Store {
             });
         }
         Ok(hits)
+    }
+
+    /// Bring the index of other machines' messages in line with `sessions`,
+    /// the other machines' sessions whose messages are in the synced folder:
+    /// read those that are new or changed, and drop those no longer there.
+    pub fn index_remote(&mut self, sessions: &[Session]) -> Result<()> {
+        let indexed: HashMap<String, i64> = {
+            let mut stmt = self.db.prepare("select key, updated_ms from remote_indexed")?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let present: HashMap<String, &Session> = sessions.iter().map(|s| (s.key(), s)).collect();
+        let stale: Vec<Session> = present
+            .iter()
+            .filter(|(key, s)| indexed.get(*key) != Some(&s.updated_ms))
+            .map(|(_, s)| (*s).clone())
+            .collect();
+        let gone: Vec<&String> = indexed.keys().filter(|key| !present.contains_key(*key)).collect();
+        if stale.is_empty() && gone.is_empty() {
+            return Ok(());
+        }
+        let read = read_all_messages(&stale);
+        let tx = self.db.transaction()?;
+        {
+            let mut clear = tx.prepare("delete from remote_messages where key = ?1")?;
+            let mut forget = tx.prepare("delete from remote_indexed where key = ?1")?;
+            let mut add = tx.prepare(
+                "insert into remote_messages (text, key, block, role) values (?1, ?2, ?3, ?4)",
+            )?;
+            let mut done = tx.prepare(
+                "insert or replace into remote_indexed (key, updated_ms) values (?1, ?2)",
+            )?;
+            for key in gone {
+                clear.execute([key])?;
+                forget.execute([key])?;
+            }
+            for (i, outcome) in read {
+                let session = &stale[i];
+                let key = session.key();
+                if let Ok(texts) = outcome {
+                    clear.execute([&key])?;
+                    for (block, role, text) in texts {
+                        add.execute(params![text, key, block as i64, role])?;
+                    }
+                    done.execute(params![key, session.updated_ms])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     fn stamps(&self) -> Result<HashMap<String, Stamp>> {
@@ -602,6 +706,7 @@ impl Store {
 }
 
 /// One message that matched a search.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageHit {
     /// The key of the session it belongs to.
     pub key: String,

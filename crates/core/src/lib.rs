@@ -12,6 +12,8 @@ pub mod search;
 pub mod sources;
 pub mod store;
 pub mod summarize;
+pub mod sync;
+pub mod tailnet;
 pub mod transcript;
 
 pub use activity::Activity;

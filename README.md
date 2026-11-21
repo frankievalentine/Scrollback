@@ -39,8 +39,11 @@ scrolling through transcripts.
   used, and the open ends still waiting.
 - **Menu bar popover.** Recent summaries and the week's activity, a click
   away, without opening the window.
+- **Across machines.** Sessions from your other computers, through iCloud
+  Drive or any folder they keep in sync, labelled with the machine they ran on.
 - **Read-only and local.** Scrollback never writes to your tools' files, and
-  its index stays on your computer.
+  its index stays on your computer. Nothing leaves it unless you turn on
+  syncing.
 
 ## Screenshots
 
@@ -151,6 +154,56 @@ Automatic summaries can be turned off in Settings → General.
 Smaller local models write rougher summaries than Haiku, and sometimes miss
 where each step began; the summary is still kept when they do.
 
+## Across machines
+
+Turn on syncing in Settings → Machines on each computer:
+
+- **macOS:** Sync through iCloud Drive. Sessions go to a `Scrollback` folder
+  there, and your other Macs' come back. "Use another folder…" picks any other
+  folder instead, so a Mac can share with a Windows or Linux computer.
+- **Windows and Linux:** Sync through a folder that OneDrive, Dropbox,
+  Syncthing or anything else keeps in sync.
+
+Each computer writes only its own file to the folder, with its sessions and
+their summaries, and reads the others'. Their sessions join the list, search,
+Activity and the menu bar, with the machine's name on each. A Machine section
+in the sidebar narrows everything to one computer; one that has not synced
+for a while is marked as asleep, and its sessions stay.
+
+"Include full messages" also shares each session's transcript (prompts,
+replies and tool names, never tool output or file contents), so it can be
+read and searched from any machine. It is off by default, as it takes more
+room: about 35 MB of text per 1,000 sessions.
+
+Summaries are written only by the computer a session ran on. "Copy resume
+command" on another machine's session reaches it over SSH, by the machine's
+name; set `ssh_hosts` in the settings file to use another address.
+
+### Over Tailscale
+
+For a machine with no synced folder, such as a devbox, Scrollback can read
+it over [Tailscale](https://tailscale.com) instead:
+
+1. On that machine, turn on "Share this Mac on Tailscale" ("this computer"
+   on Windows and Linux) in Settings → Machines. It answers whenever
+   Scrollback is running, open or in the menu bar. On a machine with no
+   screen, run `scrollback serve` instead; it can be left running as a
+   service, and keeps that machine's index and summaries current too.
+2. On your other computers, choose "Add a machine…" in Settings → Machines
+   and pick it from your Tailscale devices.
+
+Its sessions are fetched every minute, and its last copy is kept while it is
+off. Its messages are searched live as you type; a machine that does not
+answer within half a second is left out of that search.
+
+Sharing is read-only, answers only on the Tailscale address, and only to
+devices signed in to Tailscale as you. On macOS with the firewall on, macOS
+asks once whether Scrollback may accept incoming connections.
+
+On a computer with no screen and only the synced folder, `scrollback sync`
+does the same job from a terminal, and can be run every few minutes by cron
+or a systemd timer.
+
 ## Where things are kept
 
 | | macOS | Linux | Windows |
@@ -174,6 +227,8 @@ scrollback search token refresh  # fuzzy search
 scrollback show runyard redesign # a session's summary
 scrollback summarize -n 10       # summarise the ten newest without one
 scrollback export runyard -o runyard.md  # a session as Markdown
+scrollback sync                  # share with your other machines
+scrollback serve                 # answer on Tailscale, on a machine with no screen
 scrollback --help                # everything else
 ```
 

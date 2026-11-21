@@ -5042,6 +5042,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "keyring",
+ "libc",
  "nucleo-matcher",
  "rusqlite",
  "serde",
