@@ -1,6 +1,6 @@
-//! Keeps summaries up to date while the session window is closed and only
-//! the menu bar icon is left. With the window open, the window does this
-//! itself and this stays out of the way.
+//! Keeps the index, the synced folder and summaries up to date while the
+//! session window is closed and only the menu bar icon is left. With the
+//! window open, the window does this itself and this stays out of the way.
 
 use crate::settings::Settings;
 use crate::MainWindow;
@@ -22,22 +22,26 @@ pub fn start(cx: &mut App) {
         let mut paused_until: Option<Instant> = None;
         loop {
             cx.background_executor().timer(EVERY).await;
+            // Sharing on Tailscale that could not start is tried again.
+            let _ = cx.update(crate::settings::keep_sharing);
             let wanted = cx.update(|cx| {
                 let config = &cx.global::<Settings>().0;
                 let window_open = cx
                     .global::<MainWindow>()
                     .0
                     .is_some_and(|window| window.read_with(cx, |_, _| ()).is_ok());
-                (!window_open && config.onboarded && config.auto_summarize).then(|| config.clone())
+                let busy = config.auto_summarize
+                    || config.sync_enabled
+                    || config.tailscale_share
+                    || !config.tailnet_machines.is_empty();
+                (!window_open && config.onboarded && busy).then(|| config.clone())
             });
             let Ok(Some(config)) = wanted else { continue };
-            if paused_until.is_some_and(|until| Instant::now() < until) {
-                continue;
-            }
+            let paused = paused_until.is_some_and(|until| Instant::now() < until);
             let skip = failed.clone();
             let outcome = cx
                 .background_executor()
-                .spawn(async move { pass(&config, &skip) })
+                .spawn(async move { pass(&config, &skip, paused) })
                 .await;
             for (key, error) in outcome {
                 eprintln!("background summary failed for {key}: {error}");
@@ -51,18 +55,21 @@ pub fn start(cx: &mut App) {
     .detach();
 }
 
-/// Refresh the index and summarise a couple of sessions that are due one:
-/// those gone quiet, and those in use that have moved on. Returns the
-/// sessions that failed, with why.
-fn pass(config: &scrollback_core::Config, skip: &HashSet<String>) -> Vec<(String, String)> {
-    if scrollback_core::provider::ready(config).is_err() {
-        return Vec::new();
-    }
+/// Refresh the index, keep the synced folder current, and summarise a
+/// couple of sessions that are due one: those gone quiet, and those in use
+/// that have moved on. Returns the sessions that failed, with why.
+fn pass(config: &scrollback_core::Config, skip: &HashSet<String>, paused: bool) -> Vec<(String, String)> {
     let sessions = Store::open().and_then(|mut store| {
         store.refresh()?;
-        store.sessions(false)
+        scrollback_core::sync::restore(&mut store, config);
+        let sessions = store.sessions(false)?;
+        crate::home::sync_with(&mut store, &sessions, config);
+        Ok(sessions)
     });
     let Ok(sessions) = sessions else { return Vec::new() };
+    if paused || !config.auto_summarize || scrollback_core::provider::ready(config).is_err() {
+        return Vec::new();
+    }
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64);

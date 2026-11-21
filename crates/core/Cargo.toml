@@ -13,3 +13,6 @@ chrono.workspace = true
 nucleo-matcher.workspace = true
 ureq = { version = "3", features = ["json"] }
 keyring = "4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

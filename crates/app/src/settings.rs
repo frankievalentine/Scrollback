@@ -14,7 +14,7 @@ use gpui::{
 use crate::field::{Committed, TextField};
 use gpui::Entity;
 use scrollback_core::provider::{self, CLAUDE_MODELS};
-use scrollback_core::{secrets, sources, summarize, Config, Endpoint, Harness, Origin, Provider, QUIET_MINUTES};
+use scrollback_core::{secrets, sources, summarize, sync, tailnet, Config, Endpoint, Harness, Origin, Provider, QUIET_MINUTES};
 use std::path::Path;
 
 /// The saved settings. Anything that needs to follow changes observes this.
@@ -31,8 +31,32 @@ impl Global for OpenWindow {}
 pub fn install(cx: &mut App) {
     let config = Config::load();
     theme::set_mode(&config.theme);
+    cx.set_global(Sharing(None));
     cx.set_global(Settings(config));
     cx.set_global(OpenWindow(None));
+    keep_sharing(cx);
+}
+
+/// Answering on Tailscale, while "Share this Mac on Tailscale" is on: the
+/// server, or why it could not start.
+pub struct Sharing(pub Option<Result<scrollback_core::tailnet::Server, String>>);
+
+impl Global for Sharing {}
+
+/// Start or stop answering on Tailscale to match the settings, and try
+/// again if it could not start before, as when Tailscale was not yet up.
+pub fn keep_sharing(cx: &mut App) {
+    let wanted = cx.global::<Settings>().0.tailscale_share;
+    let running = matches!(cx.global::<Sharing>().0, Some(Ok(_)));
+    if wanted && !running {
+        let started = scrollback_core::tailnet::serve().map_err(|err| format!("{err:#}"));
+        if let Err(err) = &started {
+            eprintln!("could not share on Tailscale: {err}");
+        }
+        cx.set_global(Sharing(Some(started)));
+    } else if !wanted && cx.global::<Sharing>().0.is_some() {
+        cx.set_global(Sharing(None));
+    }
 }
 
 /// Save new settings and tell everything that follows them.
@@ -42,6 +66,7 @@ pub fn store(config: Config, cx: &mut App) {
     }
     theme::set_mode(&config.theme);
     cx.set_global(Settings(config));
+    keep_sharing(cx);
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -49,17 +74,19 @@ pub enum Tab {
     General,
     Sources,
     Summaries,
+    Machines,
     About,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::General, Tab::Sources, Tab::Summaries, Tab::About];
+    const ALL: [Tab; 5] = [Tab::General, Tab::Sources, Tab::Summaries, Tab::Machines, Tab::About];
 
     fn name(self) -> &'static str {
         match self {
             Tab::General => "General",
             Tab::Sources => "Sources",
             Tab::Summaries => "Summaries",
+            Tab::Machines => "Machines",
             Tab::About => "About",
         }
     }
@@ -123,6 +150,9 @@ pub struct SettingsView {
     endpoint_models: Option<Result<Vec<String>, String>>,
     /// Why the last API key could not be saved.
     key_error: Option<String>,
+    /// While adding a machine on Tailscale: the devices that could be
+    /// added, or why there are none.
+    devices: Option<Result<Vec<tailnet::Device>, String>>,
 }
 
 struct Fields {
@@ -158,7 +188,31 @@ impl SettingsView {
             ollama_models: None,
             endpoint_models: None,
             key_error: None,
+            devices: None,
         };
+        // Development aid: `SCROLLBACK_DEV_SETTINGS=tailnet` opens at the end
+        // of the Machines page with the devices to add already listed.
+        if std::env::var("SCROLLBACK_DEV_SETTINGS").as_deref() == Ok("tailnet") {
+            view.scroll.scroll_to_bottom();
+            view.devices = Some(
+                tailnet::status()
+                    .map(|status| status.mine().cloned().collect())
+                    .map_err(|err| format!("{err:#}")),
+            );
+        }
+        // The machines list follows the synced folder as it changes.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
+            let alive = this.update(cx, |this, cx| {
+                if this.tab == Tab::Machines {
+                    cx.notify();
+                }
+            });
+            if alive.is_err() {
+                break;
+            }
+        })
+        .detach();
         match config.summary_provider {
             Provider::Ollama => view.load_ollama_models(cx),
             Provider::OpenAiCompatible => view.load_endpoint_models(cx),
@@ -273,6 +327,460 @@ impl SettingsView {
             .ok();
         })
         .detach();
+    }
+
+    /// Pick the folder to sync through. With `then_on`, syncing is turned on
+    /// once one is picked.
+    fn choose_sync_folder(&mut self, then_on: bool, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Sync through this folder".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Some(folder) = paths.into_iter().next() else { return };
+            this.update(cx, |this, cx| {
+                this.change(cx, |config| {
+                    config.sync_folder = folder.to_string_lossy().into_owned();
+                    if then_on {
+                        config.sync_enabled = true;
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn machines(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let mac = cfg!(target_os = "macos");
+        let on = self.config.sync_enabled;
+        let chosen = self.config.sync_folder.trim().to_string();
+        let icloud = sync::icloud_folder();
+        // A Mac syncs through iCloud Drive unless another folder is chosen;
+        // elsewhere there is no folder until one is picked.
+        let has_folder = !chosen.is_empty() || icloud.is_some();
+        let full = self.config.sync_full_messages;
+        let all_in_popover = self.config.popover_all_machines;
+
+        let sync_switch = switch("sync", on, t).on_click(cx.listener(move |this, _, _, cx| {
+            if !on && !has_folder {
+                this.choose_sync_folder(true, cx);
+            } else {
+                this.change(cx, |c| c.sync_enabled = !on);
+            }
+        }));
+        // A Mac that has chosen another folder says so.
+        let through_icloud = mac && chosen.is_empty();
+        let mut page = page().child(row(
+            if through_icloud { "Sync through iCloud Drive" } else { "Sync through a folder" },
+            if through_icloud {
+                "This Mac's sessions and summaries go to a Scrollback folder in iCloud \
+                 Drive, and your other Macs' come back."
+            } else {
+                "This computer's sessions and summaries go to a folder your computers \
+                 keep in sync, such as OneDrive, Dropbox or Syncthing, and the others' \
+                 come back."
+            },
+            sync_switch,
+            t,
+        ));
+
+        // Where: the folder, and a way to change it.
+        let place = if !chosen.is_empty() {
+            let home = scrollback_core::home();
+            let shown = match Path::new(&chosen).strip_prefix(&home) {
+                Ok(rest) => format!("~/{}", rest.display()),
+                Err(_) => chosen.clone(),
+            };
+            ui::middle(&shown, 48)
+        } else if icloud.is_some() {
+            "iCloud Drive › Scrollback".to_string()
+        } else if mac {
+            "iCloud Drive is off on this Mac".to_string()
+        } else {
+            "No folder chosen".to_string()
+        };
+        let mut place_row = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .mt(px(-12.))
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .one_line()
+                    .font_family(mono())
+                    .text_size(px(text::CAPTION))
+                    .text_color(t.ink3)
+                    .child(place),
+            )
+            .child(
+                button(
+                    "sync-folder",
+                    match (mac, chosen.is_empty()) {
+                        (true, _) => "Use another folder…",
+                        (false, true) => "Choose folder…",
+                        (false, false) => "Change folder…",
+                    },
+                    t,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.choose_sync_folder(false, cx))),
+            );
+        if mac && !chosen.is_empty() && icloud.is_some() {
+            place_row = place_row.child(
+                button("sync-icloud", "Use iCloud Drive", t)
+                    .on_click(cx.listener(|this, _, _, cx| this.change(cx, |c| c.sync_folder.clear()))),
+            );
+        }
+        page = page.child(place_row);
+
+        page = page.child(row(
+            "Include full messages",
+            "Lets you read and search every message from any machine. Uses more space: \
+             about 35 MB of text per 1,000 sessions.",
+            switch("sync-messages", full, t)
+                .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.sync_full_messages = !full))),
+            t,
+        ));
+
+        // The other machines found in the folder.
+        if on {
+            let machines: Vec<sync::Machine> =
+                crate::home::machines().into_iter().filter(|m| m.address.is_none()).collect();
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(t.line)
+                .bg(t.raise);
+            if machines.is_empty() {
+                list = list.child(
+                    div()
+                        .px(px(14.))
+                        .py(px(12.))
+                        .text_size(px(text::SMALL))
+                        .text_color(t.ink3)
+                        .child(if mac {
+                            "No other machines yet. Turn this on in Scrollback on your other Macs."
+                        } else {
+                            "No other machines yet. Turn this on in Scrollback on your other \
+                             computers, with the same folder."
+                        }),
+                );
+            }
+            let count = machines.len();
+            for (i, machine) in machines.into_iter().enumerate() {
+                let away = machine.away();
+                let hidden = self.config.hidden_machines.contains(&machine.id);
+                let id = machine.id.clone();
+                let mut state = format!(
+                    "{} {} · {}",
+                    machine.sessions,
+                    if machine.sessions == 1 { "session" } else { "sessions" },
+                    crate::home::machine_state(&machine)
+                );
+                if hidden {
+                    state.push_str(" · hidden");
+                }
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .px(px(14.))
+                        .py(px(11.))
+                        .when(i + 1 < count, |el| el.border_b_1().border_color(t.line))
+                        .child(div().size(px(8.)).rounded(px(4.)).bg(if away { t.caution } else { t.ok }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .flex()
+                                .flex_col()
+                                .child(div().font_weight(FontWeight::MEDIUM).child(machine.name.clone()))
+                                .child(
+                                    div()
+                                        .font_family(mono())
+                                        .text_size(px(text::CAPTION))
+                                        .text_color(if away { t.caution_ink } else { t.ink3 })
+                                        .child(state),
+                                ),
+                        )
+                        .child(
+                            button(("machine-hide", i), if hidden { "Show" } else { "Hide" }, t).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    let id = id.clone();
+                                    this.change(cx, |c| {
+                                        if hidden {
+                                            c.hidden_machines.retain(|m| *m != id);
+                                        } else {
+                                            c.hidden_machines.push(id);
+                                        }
+                                    })
+                                }),
+                            ),
+                        ),
+                );
+            }
+            page = page.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .pt(px(18.))
+                    .border_t_1()
+                    .border_color(t.line)
+                    .child(label("In the synced folder", t))
+                    .child(list),
+            );
+        }
+
+        page = page.child(self.tailscale_section(t, cx));
+
+        page.child(
+            div().pt(px(18.)).border_t_1().border_color(t.line).child(row(
+                if mac { "Show other machines in the menu bar" } else { "Show other machines in the tray" },
+                if mac {
+                    "The popover's recent sessions and activity include every machine."
+                } else {
+                    "The tray's recent sessions and activity include every machine."
+                },
+                switch("popover-machines", all_in_popover, t).on_click(
+                    cx.listener(move |this, _, _, cx| this.change(cx, |c| c.popover_all_machines = !all_in_popover)),
+                ),
+                t,
+            )),
+        )
+    }
+
+    /// Ask Tailscale for the devices that could be added, in the background.
+    fn load_devices(&mut self, cx: &mut Context<Self>) {
+        self.devices = Some(Err("Looking for your devices…".to_string()));
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    tailnet::status()
+                        .map(|status| status.mine().cloned().collect::<Vec<_>>())
+                        .map_err(|err| format!("{err:#}"))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.devices = Some(found.and_then(|devices| match devices.is_empty() {
+                    true => Err("No other devices are signed in to Tailscale as you.".to_string()),
+                    false => Ok(devices),
+                }));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Sharing this machine on Tailscale, and the machines read from there.
+    fn tailscale_section(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let mac = cfg!(target_os = "macos");
+        let sharing = self.config.tailscale_share;
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .pt(px(18.))
+            .border_t_1()
+            .border_color(t.line)
+            .child(row(
+                if mac { "Share this Mac on Tailscale" } else { "Share this computer on Tailscale" },
+                if mac {
+                    "While Scrollback is open or in the menu bar, your other devices on \
+                     Tailscale can read this Mac's sessions. Only devices signed in as you, \
+                     and only to read. Needed for machines without the synced folder."
+                } else {
+                    "While Scrollback is open or in the tray, your other devices on \
+                     Tailscale can read this computer's sessions. Only devices signed in as \
+                     you, and only to read. Needed for machines without the synced folder."
+                },
+                switch("tailscale-share", sharing, t)
+                    .on_click(cx.listener(move |this, _, _, cx| this.change(cx, |c| c.tailscale_share = !sharing))),
+                t,
+            ));
+        if sharing {
+            let state = match &cx.global::<Sharing>().0 {
+                Some(Ok(server)) => (
+                    true,
+                    if cfg!(target_os = "macos") {
+                        format!(
+                            "Answering at {}. If macOS asks whether Scrollback may accept \
+                             incoming connections, allow it.",
+                            server.address.ip()
+                        )
+                    } else {
+                        format!("Answering at {}", server.address.ip())
+                    },
+                ),
+                Some(Err(why)) => (false, format!("Not sharing: {why}. Scrollback tries again every minute.")),
+                None => (false, "Starting…".to_string()),
+            };
+            section = section.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .mt(px(-4.))
+                    .text_size(px(text::SMALL))
+                    .text_color(if state.0 { t.ink3 } else { t.caution_ink })
+                    .child(div().size(px(7.)).rounded(px(4.)).bg(if state.0 { t.ok } else { t.caution }))
+                    .child(state.1),
+            );
+        }
+
+        // The machines read over Tailscale.
+        let adding = self.devices.is_some();
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .pt(px(8.))
+                .child(div().flex_1().child(label("On Tailscale", t)))
+                .child(
+                    button("tailnet-add", if adding { "Done" } else { "Add a machine…" }, t).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            if adding {
+                                this.devices = None;
+                                cx.notify();
+                            } else {
+                                this.load_devices(cx);
+                            }
+                        },
+                    )),
+                ),
+        );
+        let known = crate::home::machines();
+        let added = &self.config.tailnet_machines;
+        let mut list = div().flex().flex_col().rounded(px(10.)).border_1().border_color(t.line).bg(t.raise);
+        if added.is_empty() && !adding {
+            list = list.child(
+                div()
+                    .px(px(14.))
+                    .py(px(12.))
+                    .text_size(px(text::SMALL))
+                    .text_color(t.ink3)
+                    .child(
+                        "None yet. Turn on sharing on the other machine, or run `scrollback serve` \
+                         there, then add it here.",
+                    ),
+            );
+        }
+        for (i, address) in added.iter().enumerate() {
+            let machine = known.iter().find(|m| m.address.as_deref() == Some(address.as_str()));
+            let away = machine.is_none_or(|m| m.away());
+            let name = machine.map_or_else(
+                || address.split('.').next().unwrap_or(address).to_string(),
+                |m| m.name.clone(),
+            );
+            let state = match machine {
+                Some(m) if m.written_ms > 0 => format!(
+                    "{} {} · {}",
+                    m.sessions,
+                    if m.sessions == 1 { "session" } else { "sessions" },
+                    crate::home::machine_state(m)
+                ),
+                _ => "not reached yet".to_string(),
+            };
+            let removed = address.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .px(px(14.))
+                    .py(px(11.))
+                    .when(i + 1 < added.len() || adding, |el| el.border_b_1().border_color(t.line))
+                    .child(div().size(px(8.)).rounded(px(4.)).bg(if away { t.caution } else { t.ok }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                            .child(
+                                div()
+                                    .font_family(mono())
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(if away { t.caution_ink } else { t.ink3 })
+                                    .child(state),
+                            ),
+                    )
+                    .child(button(("tailnet-remove", i), "Remove", t).on_click(cx.listener(move |this, _, _, cx| {
+                        let removed = removed.clone();
+                        this.change(cx, |c| c.tailnet_machines.retain(|a| *a != removed));
+                    }))),
+            );
+        }
+        // Picking a device to add.
+        match &self.devices {
+            Some(Ok(devices)) => {
+                let choices: Vec<&tailnet::Device> =
+                    devices.iter().filter(|d| !added.contains(&d.address)).collect();
+                if choices.is_empty() {
+                    list = list.child(
+                        div().px(px(14.)).py(px(12.)).text_size(px(text::SMALL)).text_color(t.ink3)
+                            .child("Every device signed in as you is already here."),
+                    );
+                }
+                for (i, device) in choices.into_iter().enumerate() {
+                    let address = device.address.clone();
+                    let fill = t.fill;
+                    list = list.child(
+                        div()
+                            .id(("tailnet-device", i))
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .px(px(14.))
+                            .py(px(9.))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(fill))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let address = address.clone();
+                                this.change(cx, |c| c.tailnet_machines.push(address));
+                            }))
+                            .child(div().size(px(8.)).rounded(px(4.)).bg(if device.online { t.ok } else { t.control_off }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().child(device.name.clone()))
+                                    .child(
+                                        div()
+                                            .one_line()
+                                            .font_family(mono())
+                                            .text_size(px(text::CAPTION))
+                                            .text_color(t.ink3)
+                                            .child(format!(
+                                                "{} · {}{}",
+                                                device.address,
+                                                device.os,
+                                                if device.online { "" } else { " · offline" }
+                                            )),
+                                    ),
+                            )
+                            .child(div().text_size(px(text::SMALL)).text_color(t.accent).child("Add")),
+                    );
+                }
+            }
+            Some(Err(why)) => {
+                list = list.child(div().px(px(14.)).py(px(12.)).text_size(px(text::SMALL)).text_color(t.ink3).child(why.clone()));
+            }
+            None => {}
+        }
+        section.child(list)
     }
 
     fn general(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
@@ -829,6 +1337,7 @@ impl Render for SettingsView {
             Tab::General => self.general(&t, cx),
             Tab::Sources => self.sources(&t, cx),
             Tab::Summaries => self.summaries(&t, cx),
+            Tab::Machines => self.machines(&t, cx),
             Tab::About => self.about(&t),
         };
         let bar = chrome::bar("Settings", false, None, window, cx, &t);

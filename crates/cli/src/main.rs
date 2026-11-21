@@ -25,6 +25,12 @@ Usage:
   scrollback preview <query>       Print exactly what `summarize` would send
   scrollback export <query> [-o F] Write the best match out as Markdown, to F
                                    or to standard output
+  scrollback sync                  Update the index, write this machine's sessions
+                                   to the synced folder, and list the other
+                                   machines there
+  scrollback serve                 For a machine with no screen: keep the index
+                                   and summaries current, sync, and let your
+                                   other devices on Tailscale read its sessions
 ";
 
 fn main() -> Result<()> {
@@ -56,6 +62,8 @@ fn main() -> Result<()> {
             search(&query, limit.unwrap_or(15))
         }
         "stats" => stats(),
+        "sync" => sync(),
+        "serve" => serve(),
         "summarize" if args.len() > 1 => {
             let mut session = best_match(&args[1..].join(" "))?;
             let written = summarize::summarize(&session)?;
@@ -109,6 +117,100 @@ fn index() -> Result<()> {
         eprintln!("warning: {warning}");
     }
     stats()
+}
+
+/// What the app does while it runs, for a machine where it cannot: answer
+/// on Tailscale, and every minute update the index, sync, and summarise
+/// sessions that are due one.
+fn serve() -> Result<()> {
+    use scrollback_core::{provider, sync, tailnet, Config};
+    let server = tailnet::serve()?;
+    println!(
+        "Answering your devices on Tailscale at {} ({}). Ctrl-C stops.",
+        server.address,
+        sync::this_machine().name
+    );
+    loop {
+        let config = Config::load();
+        let pass = || -> Result<()> {
+            let mut store = Store::open()?;
+            store.refresh()?;
+            sync::restore(&mut store, &config);
+            let mine: Vec<Session> = store
+                .sessions(false)?
+                .into_iter()
+                .filter(|s| !config.hidden_sources.iter().any(|slug| slug == s.origin.slug()))
+                .collect();
+            sync::exchange(&mut store, &mine, &config);
+            if config.auto_summarize && provider::ready(&config).is_ok() {
+                let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+                for session in mine.iter().filter(|s| summarize::due(s, &config, now_ms)).take(2) {
+                    match summarize::summarize(session) {
+                        Ok(written) => {
+                            store.set_summary(session, &written.summary)?;
+                            println!("Summarised {}", written.summary.title);
+                        }
+                        Err(err) => eprintln!("Could not summarise {}: {err:#}", session.display_title()),
+                    }
+                }
+            }
+            Ok(())
+        };
+        if let Err(err) = pass() {
+            eprintln!("{err:#}");
+        }
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+fn sync() -> Result<()> {
+    use scrollback_core::{sync, Config};
+    let config = Config::load();
+    let folder = sync::folder(&config);
+    if folder.is_none() && config.tailnet_machines.is_empty() {
+        bail!(
+            "syncing is off. Turn it on in the app's Settings › Machines, or set \
+             \"sync_enabled\": true and \"sync_folder\" in {}",
+            scrollback_core::data_dir().join("config.json").display()
+        );
+    }
+    let mut store = Store::open()?;
+    store.refresh()?;
+    let restored = sync::restore(&mut store, &config);
+    if restored > 0 {
+        println!("Put back {restored} summaries from the synced folder.");
+    }
+    let mine: Vec<Session> = store
+        .sessions(false)?
+        .into_iter()
+        .filter(|s| !config.hidden_sources.iter().any(|slug| slug == s.origin.slug()))
+        .collect();
+    let (machines, others) = sync::exchange(&mut store, &mine, &config);
+    let me = sync::this_machine();
+    if let Some(folder) = &folder {
+        println!("{} sessions from {} written to {}", mine.len(), me.name, folder.display());
+    }
+    for machine in &machines {
+        let away = match (&machine.address, machine.away()) {
+            (Some(_), true) => ", not answering on Tailscale",
+            (None, true) => ", away",
+            _ => "",
+        };
+        println!(
+            "  {}: {} {}{}{}",
+            machine.name,
+            machine.sessions,
+            if machine.sessions == 1 { "session" } else { "sessions" },
+            if machine.has_messages { " with messages" } else { "" },
+            away
+        );
+    }
+    if machines.is_empty() {
+        println!("No other machines in the folder yet.");
+    } else {
+        println!("{} sessions from other machines.", others.len());
+    }
+    Ok(())
 }
 
 fn list(limit: usize, all: bool) -> Result<()> {

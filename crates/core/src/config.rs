@@ -52,6 +52,33 @@ pub struct Config {
     /// Cloudflare: the AI Gateway to route through, if any.
     #[serde(default)]
     pub cloudflare_gateway: String,
+    /// Share sessions with your other machines through a synced folder.
+    #[serde(default)]
+    pub sync_enabled: bool,
+    /// The folder to sync through; empty means iCloud Drive on macOS.
+    #[serde(default)]
+    pub sync_folder: String,
+    /// Also share each session's messages, so they can be read and found
+    /// on the other machines.
+    #[serde(default)]
+    pub sync_full_messages: bool,
+    /// Machines whose sessions are left out, by id.
+    #[serde(default)]
+    pub hidden_machines: Vec<String>,
+    /// The SSH host to reach each other machine by, when its name is not
+    /// enough, by machine id: `devbox`, `me@devbox.tailnet.ts.net`.
+    #[serde(default)]
+    pub ssh_hosts: std::collections::BTreeMap<String, String>,
+    /// Let this machine's other devices on Tailscale read its sessions while
+    /// Scrollback is running.
+    #[serde(default)]
+    pub tailscale_share: bool,
+    /// Machines read over Tailscale, by their address there.
+    #[serde(default)]
+    pub tailnet_machines: Vec<String>,
+    /// Whether the menu bar popover shows other machines' sessions too.
+    #[serde(default = "yes")]
+    pub popover_all_machines: bool,
     /// `system`, `light` or `dark`.
     #[serde(default = "system")]
     pub theme: String,
@@ -99,6 +126,14 @@ impl Default for Config {
             endpoint_urls: BTreeMap::new(),
             endpoint_models: BTreeMap::new(),
             cloudflare_gateway: String::new(),
+            sync_enabled: false,
+            sync_folder: String::new(),
+            sync_full_messages: false,
+            hidden_machines: Vec::new(),
+            ssh_hosts: Default::default(),
+            tailscale_share: false,
+            tailnet_machines: Vec::new(),
+            popover_all_machines: true,
             theme: system(),
             hidden_sources: Vec::new(),
             folders: BTreeMap::new(),

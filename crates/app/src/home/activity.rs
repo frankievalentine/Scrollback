@@ -25,20 +25,15 @@ const OPEN_ENDS_PER_SESSION: usize = 2;
 impl Home {
     /// The sessions the sidebar filters let through.
     fn in_scope(&self) -> impl Iterator<Item = &Session> {
-        self.sessions.iter().filter(|session| {
-            self.origin.is_none_or(|o| session.origin == o)
-                && self
-                    .project
-                    .as_deref()
-                    .is_none_or(|p| session.project() == p)
-        })
+        self.sessions.iter().filter(|session| self.in_filters(session))
     }
 
     /// Names the period and filters a digest covers.
     fn digest_scope(&self) -> String {
         format!(
-            "{}|{}|{}",
+            "{}|{}|{}|{}",
             self.range_days,
+            self.machine.as_deref().unwrap_or(""),
             self.origin.map_or("", |o| o.slug()),
             self.project.as_deref().unwrap_or("")
         )
@@ -91,9 +86,10 @@ impl Home {
         self.view = View::Sessions;
         self.reading = None;
         // A filter would hide the session being asked for.
-        if self.origin.is_some() || self.project.is_some() {
+        if self.origin.is_some() || self.project.is_some() || self.machine.is_some() {
             self.origin = None;
             self.project = None;
+            self.machine = None;
             self.recompute();
         }
         if !self.query.is_empty() {

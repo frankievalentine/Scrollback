@@ -33,6 +33,10 @@ pub const LIVE_AFTER_MS: i64 = 2 * 60 * 1000;
 /// couple of minutes, and again each time it has moved on by ten minutes,
 /// when `live_summaries` is on.
 pub fn due(session: &Session, config: &Config, now_ms: i64) -> bool {
+    // Each machine summarises its own sessions.
+    if session.machine.is_some() {
+        return false;
+    }
     if session.summary.is_some() && !session.summary_stale {
         return false;
     }

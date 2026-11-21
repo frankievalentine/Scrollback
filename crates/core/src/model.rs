@@ -283,6 +283,9 @@ pub struct Session {
     /// The session's last activity at the time its summary was written, so
     /// the summary covers everything up to then.
     pub summary_for_ms: Option<i64>,
+    /// The other machine the session ran on, for sessions read from the
+    /// synced folder; `None` for this machine's own.
+    pub machine: Option<crate::sync::MachineRef>,
 }
 
 impl Session {
@@ -312,6 +315,7 @@ impl Session {
             summary: None,
             summary_stale: false,
             summary_for_ms: None,
+            machine: None,
         }
     }
 
@@ -321,8 +325,13 @@ impl Session {
         self.tokens_in + self.tokens_out
     }
 
+    /// Another machine's session carries that machine's id in front, so the
+    /// same session can never be mistaken for one of this machine's.
     pub fn key(&self) -> String {
-        format!("{}:{}", self.harness.slug(), self.id)
+        match &self.machine {
+            Some(machine) => format!("{}/{}:{}", machine.id, self.harness.slug(), self.id),
+            None => format!("{}:{}", self.harness.slug(), self.id),
+        }
     }
 
     /// The summary's title when there is one, otherwise the harness's.

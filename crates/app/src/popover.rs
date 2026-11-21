@@ -72,7 +72,8 @@ pub fn toggle(icon: Option<tray_icon::Rect>, cx: &mut App) {
 
     // What the index already holds, so the popover is there at once. It
     // brings itself up to date a moment later.
-    let sessions = home::load_saved();
+    let all_machines = cx.global::<crate::settings::Settings>().0.popover_all_machines;
+    let sessions = for_popover(home::load_saved(), all_machines);
     let quiet = std::env::var_os("SCROLLBACK_BACKGROUND").is_some();
     let opened = cx.open_window(
         WindowOptions {
@@ -94,6 +95,15 @@ pub fn toggle(icon: Option<tray_icon::Rect>, cx: &mut App) {
     if let Ok(window) = opened {
         cx.global_mut::<Open>().window = Some(window);
     }
+}
+
+/// The sessions the popover shows: every machine's, unless the settings
+/// keep it to this one.
+fn for_popover(mut sessions: Vec<Session>, all_machines: bool) -> Vec<Session> {
+    if !all_machines {
+        sessions.retain(|s| s.machine.is_none());
+    }
+    sessions
 }
 
 /// The open popover, for development checks.
@@ -158,6 +168,8 @@ pub struct Popover {
     /// Sessions used today.
     today: usize,
     sessions: Vec<Session>,
+    /// Whether Activity counts this machine's sessions only.
+    here_only: bool,
     entries: Vec<Entry>,
     /// The sessions listed, in order; the selection is an index into this.
     listed: Vec<usize>,
@@ -201,6 +213,7 @@ impl Popover {
             week: Activity::default(),
             today: 0,
             sessions,
+            here_only: false,
             entries: Vec::new(),
             listed: Vec::new(),
             selected: 0,
@@ -234,7 +247,11 @@ impl Popover {
         // the background and take in whatever is new.
         cx.spawn(async move |this, cx| {
             let (sessions, _) = cx.background_executor().spawn(async { home::load() }).await;
-            this.update(cx, |this, cx| this.refreshed(sessions, cx)).ok();
+            this.update(cx, |this, cx| {
+                let all_machines = cx.global::<crate::settings::Settings>().0.popover_all_machines;
+                this.refreshed(for_popover(sessions, all_machines), cx)
+            })
+            .ok();
         })
         .detach();
         popover
@@ -280,6 +297,12 @@ impl Popover {
         )
     }
 
+    /// The sessions Activity counts.
+    fn counted(&self) -> impl Iterator<Item = &Session> {
+        let here_only = self.here_only;
+        self.sessions.iter().filter(move |s| !here_only || s.machine.is_none())
+    }
+
     fn current(&self) -> Option<&Session> {
         self.listed.get(self.selected).map(|&i| &self.sessions[i])
     }
@@ -287,8 +310,8 @@ impl Popover {
     /// Rebuild the list for the current search. Only sessions that already
     /// have a summary are listed: the most recent few, or the best matches.
     fn recompute(&mut self) {
-        self.week = Activity::over(&self.sessions, 7);
-        self.today = Activity::over(&self.sessions, 1).sessions;
+        self.week = Activity::over(self.counted(), 7);
+        self.today = Activity::over(self.counted(), 1).sessions;
         self.entries.clear();
         self.selected = 0;
         self.copied = None;
@@ -496,6 +519,7 @@ impl Popover {
             .text_size(px(text::BODY))
             .child(svg().path("search.svg").size(px(14.)).flex_shrink_0().text_color(t.ink3))
             .child(div().flex_1().min_w(px(0.)).child(text))
+            .children(self.scope_switch(t, cx))
             .child(
                 div()
                     .flex_shrink_0()
@@ -507,6 +531,50 @@ impl Popover {
                     .child(tab("popover-recent", "Recent", View::Recent, cx))
                     .child(tab("popover-activity", "Activity", View::Activity, cx)),
             )
+    }
+
+    /// On Activity, with other machines' sessions here: whether to count
+    /// this machine's alone or every machine's.
+    fn scope_switch(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        if self.view != View::Activity || self.sessions.iter().all(|s| s.machine.is_none()) {
+            return None;
+        }
+        let option = |id: &'static str, name: &'static str, here_only: bool, cx: &mut Context<Self>| {
+            let on = self.here_only == here_only;
+            let ink = t.ink;
+            div()
+                .id(id)
+                .reachable(t)
+                .h(px(24.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .text_size(px(text::CAPTION))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(if on { t.ink } else { t.ink3 })
+                .when(on, |el| el.bg(t.segment))
+                .cursor_pointer()
+                .hover(move |style| style.text_color(ink))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.here_only = here_only;
+                    this.recompute();
+                    cx.notify();
+                }))
+                .child(name)
+        };
+        let here = if cfg!(target_os = "macos") { "This Mac" } else { "This computer" };
+        Some(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .p(px(2.))
+                .gap(px(2.))
+                .rounded(px(8.))
+                .bg(t.fill)
+                .child(option("popover-here", here, true, cx))
+                .child(option("popover-all", "All machines", false, cx)),
+        )
     }
 
     fn list(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -614,11 +682,10 @@ impl Popover {
                                     .text_color(t.ink3)
                                     .child(mark)
                                     .child(logo(session.origin, t, 11.))
-                                    .child(div().min_w(px(0.)).one_line().child(format!(
-                                        "{} · {}",
-                                        session.project(),
-                                        when
-                                    ))),
+                                    .child(div().min_w(px(0.)).one_line().child(match &session.machine {
+                                        Some(machine) => format!("{} · {} · {}", machine.name, session.project(), when),
+                                        None => format!("{} · {}", session.project(), when),
+                                    })),
                             ),
                     );
                 }
@@ -754,7 +821,8 @@ impl Popover {
     /// was left open.
     fn activity(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let week = &self.week;
-        let days = week_days(&self.sessions);
+        let counted: Vec<Session> = self.counted().cloned().collect();
+        let days = week_days(&counted);
         let today = days.last().cloned().unwrap_or_default();
 
         // The figures: today, and the week, each as sessions and time.

@@ -44,6 +44,9 @@ impl AssetSource for Assets {
             "openai.svg" => Some(include_bytes!("../assets/openai.svg")),
             "cursor.svg" => Some(include_bytes!("../assets/cursor.svg")),
             "t3.svg" => Some(include_bytes!("../assets/t3.svg")),
+            "chevron-down.svg" => Some(include_bytes!("../assets/chevron-down.svg")),
+            "chevron-right.svg" => Some(include_bytes!("../assets/chevron-right.svg")),
+            "caution.svg" => Some(include_bytes!("../assets/caution.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -176,6 +179,7 @@ fn main() {
             let tab = match page.as_str() {
                 "sources" => settings::Tab::Sources,
                 "summaries" => settings::Tab::Summaries,
+                "machines" | "tailnet" => settings::Tab::Machines,
                 "about" => settings::Tab::About,
                 _ => settings::Tab::General,
             };

@@ -22,7 +22,7 @@ use gpui::{
 };
 use scrollback_core::search::{Hit, Searcher};
 use scrollback_core::{
-    summarize, Activity, Config, Digest, Harness, MessageHit, Origin, Outcome, Session, Store,
+    summarize, sync, Activity, Config, Digest, Harness, MessageHit, Origin, Outcome, Session, Store,
     Summary,
 };
 use std::collections::{HashMap, HashSet};
@@ -39,25 +39,51 @@ const LIMIT_PAUSE: Duration = Duration::from_secs(30 * 60);
 /// Read the sessions the index already holds, without looking at the
 /// harnesses again. Instant, and possibly a minute or so behind.
 pub fn load_saved() -> Vec<Session> {
-    let hidden = Config::load().hidden_sources;
-    let mut sessions = Store::open()
+    let config = Config::load();
+    let mine = Store::open()
         .and_then(|store| store.sessions(false))
         .unwrap_or_default();
-    sessions.retain(|s| !hidden.iter().any(|slug| slug == s.origin.slug()));
+    let (machines, others) = sync::read(&config);
+    *MACHINES.lock().unwrap() = machines;
+    shown(sync::merge(mine, others), &config)
+}
+
+/// Sources switched off in the settings are left out entirely.
+fn shown(mut sessions: Vec<Session>, config: &Config) -> Vec<Session> {
+    sessions.retain(|s| !config.hidden_sources.iter().any(|slug| slug == s.origin.slug()));
     sessions
 }
 
-/// Refresh the index and read every session from it.
+/// The other machines in the synced folder, as last read.
+static MACHINES: std::sync::Mutex<Vec<sync::Machine>> = std::sync::Mutex::new(Vec::new());
+
+pub fn machines() -> Vec<sync::Machine> {
+    MACHINES.lock().unwrap().clone()
+}
+
+/// Bring this machine's file in the synced folder up to date, and read the
+/// other machines' sessions from it, indexing their messages for search.
+/// `mine` is this machine's sessions as just read from the index.
+pub fn sync_with(store: &mut Store, mine: &[Session], config: &Config) -> Vec<Session> {
+    let (machines, others) = sync::exchange(store, &shown(mine.to_vec(), config), config);
+    *MACHINES.lock().unwrap() = machines;
+    others
+}
+
+/// Refresh the index and read every session from it, and from the other
+/// machines.
 pub fn load() -> (Vec<Session>, SharedString) {
+    let config = Config::load();
     let loaded = Store::open().and_then(|mut store| {
         let report = store.refresh()?;
-        Ok((store.sessions(false)?, report))
+        sync::restore(&mut store, &config);
+        let mine = store.sessions(false)?;
+        let others = sync_with(&mut store, &mine, &config);
+        Ok((sync::merge(mine, others), report))
     });
     match loaded {
-        Ok((mut sessions, report)) => {
-            // Sources switched off in the settings are left out entirely.
-            let hidden = Config::load().hidden_sources;
-            sessions.retain(|s| !hidden.iter().any(|slug| slug == s.origin.slug()));
+        Ok((sessions, report)) => {
+            let sessions = shown(sessions, &config);
             let status = format!(
                 "{} sessions\nindexed in {:.0?}",
                 sessions.len(),
@@ -102,6 +128,16 @@ pub struct Home {
     /// The source the sidebar is filtering to.
     origin: Option<Origin>,
     project: Option<String>,
+    /// The machine the sidebar is filtering to, by id; empty for this one.
+    machine: Option<String>,
+    /// The other machines in the synced folder.
+    machines: Vec<sync::Machine>,
+    /// Sidebar sections folded away, by name.
+    folded: HashSet<&'static str>,
+    /// Messages found on machines on Tailscale, and the search they answer.
+    tailnet_hits: (String, Vec<MessageHit>),
+    /// Counts searches sent to Tailscale, so only the latest is taken in.
+    tailnet_asked: u64,
     selected: Option<usize>,
     /// While searching, results stay compact so more of them fit; this is
     /// set when the selected one has been opened into its full card.
@@ -185,6 +221,11 @@ impl Home {
             query,
             origin: None,
             project: None,
+            machine: None,
+            machines: machines(),
+            folded: HashSet::new(),
+            tailnet_hits: (String::new(), Vec::new()),
+            tailnet_asked: 0,
             selected: None,
             expanded: false,
             copied: None,
@@ -222,7 +263,19 @@ impl Home {
             home.config.auto_summarize = false;
         }
         home.recompute();
+        // Development aid: `SCROLLBACK_DEV_SELECT=2` selects the third row.
+        if let Some(n) = std::env::var("SCROLLBACK_DEV_SELECT").ok().and_then(|n| n.parse().ok()) {
+            if n < home.selectable() {
+                home.selected = Some(n);
+            }
+        }
+        // Development aid: `SCROLLBACK_DEV_MACHINE=devbox` filters to that machine.
+        if let Ok(name) = std::env::var("SCROLLBACK_DEV_MACHINE") {
+            home.machine = home.machines.iter().find(|m| m.name == name).map(|m| m.id.clone());
+            home.recompute();
+        }
         home.pump_summaries(cx);
+        home.ask_tailnet(cx);
 
         // Blink the search caret, but only while it is on screen in the
         // window being typed into, so an idle window draws nothing.
@@ -311,14 +364,7 @@ impl Home {
     fn recompute(&mut self) {
         let started = Instant::now();
         let mut hits = self.searcher.search(&self.query, &self.sessions);
-        hits.retain(|hit| {
-            let session = &self.sessions[hit.index];
-            self.origin.is_none_or(|o| session.origin == o)
-                && self
-                    .project
-                    .as_deref()
-                    .is_none_or(|p| session.project() == p)
-        });
+        hits.retain(|hit| self.in_filters(&self.sessions[hit.index]));
         self.hits = hits;
 
         self.by_key = self
@@ -334,16 +380,16 @@ impl Home {
             }
             _ => Vec::new(),
         };
+        if !grouped_by_day && self.tailnet_hits.0 == self.query {
+            message_hits.extend(self.tailnet_hits.1.iter().cloned());
+        }
         message_hits.retain(|hit| {
-            self.by_key.get(&hit.key).is_some_and(|&i| {
-                let session = &self.sessions[i];
-                self.origin.is_none_or(|o| session.origin == o)
-                    && self
-                        .project
-                        .as_deref()
-                        .is_none_or(|p| session.project() == p)
-            })
+            self.by_key
+                .get(&hit.key)
+                .is_some_and(|&i| self.in_filters(&self.sessions[i]))
         });
+        // This machine's first, then each other machine's in a group.
+        message_hits.sort_by_cached_key(|hit| self.message_group(hit));
         self.message_hits = message_hits;
         self.search_time = started.elapsed();
 
@@ -362,10 +408,17 @@ impl Home {
             }
             self.rows.push(Row::Session(i));
         }
-        if !self.message_hits.is_empty() {
-            self.rows.push(Row::Header("IN MESSAGES".into()));
-            self.rows
-                .extend((0..self.message_hits.len()).map(Row::Message));
+        let mut group = None;
+        for (i, hit) in self.message_hits.iter().enumerate() {
+            let this = self.message_group(hit);
+            if group.as_ref() != Some(&this) {
+                self.rows.push(Row::Header(match &this.1 {
+                    None => "IN MESSAGES".into(),
+                    Some(name) => format!("IN MESSAGES ON {}", name.to_uppercase()).into(),
+                }));
+                group = Some(this);
+            }
+            self.rows.push(Row::Message(i));
         }
         self.selected = (self.selectable() > 0).then_some(0);
         self.expanded = false;
@@ -374,6 +427,74 @@ impl Home {
         if self.view == View::Activity {
             self.refresh_activity();
         }
+    }
+
+    /// Which group a message result is listed in: this machine's, then
+    /// another machine's by name.
+    fn message_group(&self, hit: &MessageHit) -> (bool, Option<String>) {
+        let machine = self
+            .by_key
+            .get(&hit.key)
+            .and_then(|&i| self.sessions[i].machine.as_ref())
+            .map(|m| m.name.clone());
+        (machine.is_some(), machine)
+    }
+
+    /// Search the messages on machines on Tailscale, a moment after typing
+    /// stops. Each answers within half a second or is left out; the results
+    /// join this machine's when they arrive.
+    fn ask_tailnet(&mut self, cx: &mut Context<Self>) {
+        if self.config.tailnet_machines.is_empty() || self.query.trim().chars().count() < 3 {
+            return;
+        }
+        self.tailnet_asked += 1;
+        let asked = self.tailnet_asked;
+        let (query, config) = (self.query.clone(), self.config.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(250)).await;
+            let current = this.read_with(cx, |this, _| this.tailnet_asked == asked).unwrap_or(false);
+            if !current {
+                return;
+            }
+            let searched = query.clone();
+            let hits = cx
+                .background_executor()
+                .spawn(async move { scrollback_core::tailnet::search(&config, &searched, 20) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.tailnet_asked != asked || this.query != query {
+                    return;
+                }
+                let found = hits.len();
+                this.tailnet_hits = (query, hits);
+                if found > 0 {
+                    // Keep the selection where it was.
+                    let selected = this.selected;
+                    this.recompute();
+                    if selected.is_some_and(|s| s < this.selectable()) {
+                        this.selected = selected;
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Whether a session is on the machine the sidebar is filtering to.
+    fn on_machine(&self, session: &Session) -> bool {
+        self.machine.as_deref().is_none_or(|id| machine_id(session) == id)
+    }
+
+    /// Whether a session gets through every sidebar filter.
+    pub(crate) fn in_filters(&self, session: &Session) -> bool {
+        self.on_machine(session)
+            && self.origin.is_none_or(|o| session.origin == o)
+            && self
+                .project
+                .as_deref()
+                .is_none_or(|p| session.project() == p)
     }
 
     /// How many rows can be selected: session results, then message results.
@@ -469,6 +590,7 @@ impl Home {
         self.digest_error = None;
         self.paused_until = None;
         self.sessions = sessions;
+        self.machines = machines();
         self.status = status;
         self.recompute();
         self.pump_summaries(cx);
@@ -486,6 +608,7 @@ impl Home {
                 .collect()
         };
         self.status = status;
+        self.machines = machines();
         if fingerprint(&sessions) != fingerprint(&self.sessions) {
             let selected_key = self
                 .selected
@@ -574,8 +697,13 @@ impl Home {
         }
         // Which sources show, and where they are read from, decide what the
         // index holds, so those need the sessions read again.
-        let reread =
-            new.hidden_sources != self.config.hidden_sources || new.folders != self.config.folders;
+        let reread = new.hidden_sources != self.config.hidden_sources
+            || new.folders != self.config.folders
+            || new.sync_enabled != self.config.sync_enabled
+            || new.sync_folder != self.config.sync_folder
+            || new.sync_full_messages != self.config.sync_full_messages
+            || new.hidden_machines != self.config.hidden_machines
+            || new.tailnet_machines != self.config.tailnet_machines;
         self.config = new;
         // A change of provider can make summaries possible, or not.
         self.summaries_ready = scrollback_core::provider::ready(&self.config).is_ok();
@@ -734,6 +862,7 @@ impl Home {
                         self.view = View::Sessions;
                         self.query.push_str(keystroke.key_char.as_deref().unwrap_or(""));
                         self.recompute();
+                        self.ask_tailnet(cx);
                         cx.notify();
                     }
                 }
@@ -755,6 +884,7 @@ impl Home {
                 if self.query.is_empty() {
                     self.origin = None;
                     self.project = None;
+                    self.machine = None;
                 } else {
                     self.query.clear();
                 }
@@ -768,6 +898,7 @@ impl Home {
                     self.query.pop();
                 }
                 self.recompute();
+                self.ask_tailnet(cx);
                 cx.notify();
             }
             _ => {
@@ -783,6 +914,7 @@ impl Home {
                 }
                 self.query.push_str(typed);
                 self.recompute();
+                self.ask_tailnet(cx);
                 cx.notify();
             }
         }
@@ -819,9 +951,14 @@ impl Home {
         // One row for each program sessions were run from. The first
         // command-line harnesses are always listed; the rest are listed once
         // they have sessions, so the list stays short as more are supported.
-        let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Source", t)));
+        // Choosing a machine narrows the other lists' counts to it.
+        let here: Vec<&Session> = self.sessions.iter().filter(|s| self.on_machine(s)).collect();
+        let mut harnesses = self.section("Source", t, cx);
         for origin in Origin::ALL {
-            let count = self.sessions.iter().filter(|s| s.origin == origin).count();
+            if self.folded.contains("Source") {
+                break;
+            }
+            let count = here.iter().filter(|s| s.origin == origin).count();
             let active = self.origin == Some(origin);
             if !origin.always_listed() && count == 0 && !active {
                 continue;
@@ -844,7 +981,7 @@ impl Home {
         // Projects, most recently used first: sessions arrive newest first,
         // so a project's place is that of its latest session.
         let mut counts: Vec<(String, usize)> = Vec::new();
-        for session in &self.sessions {
+        for session in &here {
             let name = session.project();
             if name.is_empty() {
                 continue;
@@ -854,8 +991,9 @@ impl Home {
                 None => counts.push((name.to_string(), 1)),
             }
         }
-        let mut projects = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Project", t)));
-        for (i, (name, count)) in counts.into_iter().take(60).enumerate() {
+        let mut projects = self.section("Project", t, cx);
+        let shown = if self.folded.contains("Project") { 0 } else { 60 };
+        for (i, (name, count)) in counts.into_iter().take(shown).enumerate() {
             let active = self.project.as_deref() == Some(name.as_str());
             let clicked = name.clone();
             projects = projects.child(
@@ -912,6 +1050,7 @@ impl Home {
                             .flex_col()
                             .gap(px(22.))
                             .child(harnesses)
+                            .children(self.machine_section(t, cx))
                             .child(projects),
                     )
                     // In the sidebar's own margin, clear of the counts.
@@ -946,6 +1085,97 @@ impl Home {
             )
     }
 
+    /// A sidebar section's heading, which folds the section away.
+    fn section(&self, title: &'static str, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let folded = self.folded.contains(title);
+        let head = div()
+            .id(title)
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(10.))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.folded.remove(title) {
+                    this.folded.insert(title);
+                }
+                cx.notify();
+            }))
+            .child(label(title, t))
+            .child(
+                svg()
+                    .path(if folded { "chevron-right.svg" } else { "chevron-down.svg" })
+                    .size(px(12.))
+                    .mb(px(6.))
+                    .text_color(t.ink3),
+            );
+        div().flex().flex_col().gap(px(2.)).child(head)
+    }
+
+    /// The machines sessions come from, when there is more than one.
+    fn machine_section(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let others: Vec<&sync::Machine> = self
+            .machines
+            .iter()
+            .filter(|m| !self.config.hidden_machines.contains(&m.id))
+            .collect();
+        if others.is_empty() {
+            return None;
+        }
+        let mut section = self.section("Machine", t, cx);
+        if self.folded.contains("Machine") {
+            return Some(section);
+        }
+        let mut rows: Vec<(String, String, Option<&sync::Machine>)> =
+            vec![(String::new(), this_machine_label().to_string(), None)];
+        rows.extend(others.into_iter().map(|m| (m.id.clone(), m.name.clone(), Some(m))));
+        for (i, (id, name, machine)) in rows.into_iter().enumerate() {
+            let count = self.sessions.iter().filter(|s| machine_id(s) == id).count();
+            let active = self.machine.as_deref() == Some(id.as_str());
+            let away = machine.is_some_and(|m| m.away());
+            let dot = div().size(px(16.)).flex_shrink_0().flex().items_center().justify_center().child(
+                div()
+                    .size(px(8.))
+                    .rounded(px(4.))
+                    .bg(if away { t.caution } else { t.ok }),
+            );
+            let mut row = nav_row(t, active)
+                .id(("machine", i))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let same = this.machine.as_deref() == Some(id.as_str());
+                    this.machine = (!same).then(|| id.clone());
+                    this.recompute();
+                    this.pump_digest(cx);
+                    cx.notify();
+                }))
+                .child(dot)
+                .child(div().flex_1().min_w(px(0.)).one_line().child(name))
+                .child(count_badge(count, t));
+            if let Some(machine) = machine {
+                row = row.tooltip(ui::tip(machine_state(machine)));
+            }
+            section = section.child(row);
+        }
+        Some(section)
+    }
+
+    /// A machine's name, from its id; empty is this one.
+    fn machine_name(&self, id: &str) -> String {
+        if id.is_empty() {
+            return this_machine_label().to_string();
+        }
+        self.machines
+            .iter()
+            .find(|m| m.id == id)
+            .map_or_else(|| "another machine".to_string(), |m| m.name.clone())
+    }
+
+    /// The other machine a session is from, as last read from the folder.
+    pub(crate) fn machine_of(&self, session: &Session) -> Option<&sync::Machine> {
+        let id = &session.machine.as_ref()?.id;
+        self.machines.iter().find(|m| &m.id == id)
+    }
+
     /// A line about summary work in progress, when there is something to say.
     fn summary_status(&self) -> Option<String> {
         if let Some(until) = self.paused_until.filter(|until| Instant::now() < *until) {
@@ -970,6 +1200,7 @@ impl Home {
     fn clear_filters(&mut self, cx: &mut Context<Self>) {
         self.origin = None;
         self.project = None;
+        self.machine = None;
         self.recompute();
         self.pump_digest(cx);
         cx.notify();
@@ -977,10 +1208,11 @@ impl Home {
 
     /// The filters in force, as words: "Codex, runyard".
     fn filter_words(&self) -> Option<String> {
-        let parts: Vec<&str> = self
-            .origin
-            .map(|o| o.name())
+        let machine = self.machine.as_deref().map(|id| self.machine_name(id));
+        let parts: Vec<&str> = machine
+            .as_deref()
             .into_iter()
+            .chain(self.origin.map(|o| o.name()))
             .chain(self.project.as_deref())
             .collect();
         (!parts.is_empty()).then(|| parts.join(", "))
@@ -1108,6 +1340,10 @@ impl Home {
         let Some(index) = self.selected_session() else {
             return;
         };
+        // Another machine's sessions are summarised there.
+        if self.sessions[index].machine.is_some() {
+            return;
+        }
         // Asking by hand overrides an earlier failure or pause.
         self.failed.remove(&self.sessions[index].key());
         self.paused_until = None;
@@ -1212,6 +1448,9 @@ impl Home {
             .text_size(px(text::CAPTION))
             .text_color(t.ink3);
         if let Some(session) = self.by_key.get(&hit.key).map(|&i| &self.sessions[i]) {
+            if let Some(machine) = &session.machine {
+                origin = origin.child(div().flex_shrink_0().text_color(t.ink2).child(machine.name.clone()));
+            }
             origin = origin
                 .child(logo(session.origin, t, 12.))
                 .child(
@@ -1356,7 +1595,7 @@ impl Home {
                     .items_center()
                     .justify_between()
                     .gap(px(12.))
-                    .child(facts(session, t, true))
+                    .child(facts_after(machine_chip(session, self.machine_of(session), t), session, t, true))
                     .children(
                         session
                             .summary
@@ -1408,6 +1647,33 @@ impl Home {
             }
         }
 
+        let remote = session.machine.is_some();
+        let on_tailnet = session.machine.as_ref().is_some_and(|m| m.address.is_some());
+        let away = self.machine_of(session).is_some_and(|m| m.away());
+        // A machine on Tailscale is asked for the transcript, so it has to
+        // be answering.
+        let has_transcript = !remote || (sync::has_events(session) && !(on_tailnet && away));
+        if let Some(machine) = self.machine_of(session).filter(|m| m.away()) {
+            let mut words = if on_tailnet {
+                format!(
+                    "{} is not answering on Tailscale; it was last reached {}. Its summary is here, \
+                     and the transcript comes across once it is back.",
+                    machine.name,
+                    ago(machine.written_ms)
+                )
+            } else {
+                format!(
+                    "{} is asleep; it last synced {}. Its summary is here.",
+                    machine.name,
+                    ago(machine.written_ms)
+                )
+            };
+            if !has_transcript && !on_tailnet {
+                words.push_str(" The transcript comes across when Include full messages is on.");
+            }
+            card = card.child(caution_notice(words, t));
+        }
+
         let summary_action = if busy {
             "Writing summary…"
         } else if session.summary.is_none() {
@@ -1418,7 +1684,8 @@ impl Home {
         // The summary button is offered only when there is something to do:
         // none written yet, or the session has moved on. Rewriting a current
         // one is in the Session menu.
-        let offer_summary = busy || session.summary.is_none() || session.summary_stale;
+        // Another machine's sessions are summarised there.
+        let offer_summary = !remote && (busy || session.summary.is_none() || session.summary_stale);
         let mut actions = div()
             .flex()
             .flex_wrap()
@@ -1468,10 +1735,17 @@ impl Home {
                     .border_color(t.line)
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .hover(|style| style.bg(t.fill))
-                    .active(|style| style.opacity(0.75))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_transcript(cx)))
+                    .when(!has_transcript, |el| {
+                        el.text_color(t.ink3).opacity(0.6).tooltip(ui::tip(
+                            "Its messages are not shared. Turn on Include full messages on that machine.",
+                        ))
+                    })
+                    .when(has_transcript, |el| {
+                        el.cursor_pointer()
+                            .hover(|style| style.bg(t.fill))
+                            .active(|style| style.opacity(0.75))
+                            .on_click(cx.listener(|this, _, _, cx| this.open_transcript(cx)))
+                    })
                     .child("Read transcript"),
             )
             .when(offer_summary, |el| el.child(
@@ -1890,7 +2164,21 @@ fn initial(name: &str, t: &Theme, size: f32) -> Div {
 }
 
 /// The line of small facts under a session: harness, project, branch, time.
+/// Another machine's session starts with that machine's name.
 pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
+    let lead = session.machine.as_ref().map(|machine| {
+        div()
+            .flex_shrink_0()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(t.ink2)
+            .child(machine.name.clone())
+            .into_any_element()
+    });
+    facts_after(lead, session, t, with_time)
+}
+
+/// The facts line, after something that leads it.
+fn facts_after(lead: Option<AnyElement>, session: &Session, t: &Theme, with_time: bool) -> Div {
     let mut row = div()
         .flex()
         .items_center()
@@ -1898,6 +2186,7 @@ pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
         .font_family(mono())
         .text_size(px(text::CAPTION))
         .text_color(t.ink3)
+        .children(lead)
         .child(logo(session.origin, t, 14.))
         .child(session.origin.name());
     if !session.project().is_empty() {
@@ -1919,6 +2208,66 @@ pub(crate) fn facts(session: &Session, t: &Theme, with_time: bool) -> Div {
         ));
     }
     row.child(duration_label(session.duration_ms()))
+}
+
+/// The tinted chip naming another machine on a session's card: amber, with
+/// a dot, when that machine is away.
+fn machine_chip(session: &Session, machine: Option<&sync::Machine>, t: &Theme) -> Option<AnyElement> {
+    let name = session.machine.as_ref()?.name.clone();
+    let away = machine.is_some_and(|m| m.away());
+    let chip = div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .px(px(7.))
+        .py(px(1.))
+        .rounded(px(5.))
+        .font_weight(FontWeight::SEMIBOLD);
+    Some(if away {
+        chip.bg(t.caution_fill)
+            .text_color(t.caution_ink)
+            .child(div().size(px(6.)).rounded(px(3.)).bg(t.caution))
+            .child(if machine.is_some_and(|m| m.address.is_some()) {
+                format!("{name} · away")
+            } else {
+                format!("{name} · asleep")
+            })
+            .into_any_element()
+    } else {
+        chip.bg(t.chip_fill).text_color(t.chip_ink).child(name).into_any_element()
+    })
+}
+
+/// A notice in the caution colour, with its sign.
+pub(crate) fn caution_notice(words: impl Into<SharedString>, t: &Theme) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(10.))
+        .px(px(14.))
+        .py(px(12.))
+        .rounded(px(9.))
+        .bg(t.caution_fill)
+        .border_1()
+        .border_color(t.caution_line)
+        .child(
+            svg()
+                .path("caution.svg")
+                .size(px(16.))
+                .mt(px(2.))
+                .flex_shrink_0()
+                .text_color(t.caution),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .text_size(px(text::SMALL))
+                .line_height(px(19.))
+                .text_color(t.caution_ink)
+                .child(words.into()),
+        )
 }
 
 /// The title with fuzzy-matched characters picked out in the accent colour.
@@ -1970,6 +2319,50 @@ pub(crate) fn covers(session: &Session) -> Option<String> {
     })
 }
 
+/// The id of the machine a session is from; empty for this one.
+pub(crate) fn machine_id(session: &Session) -> &str {
+    session.machine.as_ref().map_or("", |m| m.id.as_str())
+}
+
+/// What this machine is called in lists of machines.
+pub(crate) fn this_machine_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "This Mac"
+    } else {
+        "This computer"
+    }
+}
+
+/// How long ago, roughly: "just now", "4 min ago", "2 h ago", "3 days ago".
+pub(crate) fn ago(ms: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let minutes = (now - ms).max(0) / 60_000;
+    match minutes {
+        0..=1 => "just now".to_string(),
+        2..=59 => format!("{minutes} min ago"),
+        60..=1439 => format!("{} h ago", minutes / 60),
+        1440..=2879 => "yesterday".to_string(),
+        _ => format!("{} days ago", minutes / 1440),
+    }
+}
+
+/// Whether another machine is in touch, and when it last wrote.
+pub(crate) fn machine_state(machine: &sync::Machine) -> String {
+    if machine.written_ms == 0 {
+        return "not reached yet".to_string();
+    }
+    if machine.address.is_some() && machine.away() {
+        return format!("not answering, last reached {}", ago(machine.written_ms));
+    }
+    if machine.away() {
+        format!("asleep, synced {}", ago(machine.written_ms))
+    } else {
+        format!("updated {}", ago(machine.written_ms))
+    }
+}
+
 pub(crate) fn day_label(ms: i64) -> String {
     let Some(then) = local(ms) else {
         return String::new();
@@ -2005,7 +2398,26 @@ pub(crate) fn compact_number(n: u64) -> String {
 /// for the shell most people have: PowerShell on Windows, a Unix shell
 /// elsewhere.
 pub(crate) fn resume_command(session: &Session) -> String {
-    resume_for(session, cfg!(windows))
+    let Some(machine) = &session.machine else {
+        return resume_for(session, cfg!(windows));
+    };
+    // Another machine's session is resumed there, over SSH.
+    let host = Config::load()
+        .ssh_hosts
+        .get(&machine.id)
+        .filter(|host| !host.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| machine.name.clone());
+    over_ssh(&host, &resume_for(session, machine.os == "windows"), cfg!(windows))
+}
+
+/// A command run on `host` over SSH, quoted for the shell here.
+fn over_ssh(host: &str, command: &str, powershell: bool) -> String {
+    let quoted = match powershell {
+        true => format!("'{}'", command.replace('\'', "''")),
+        false => format!("'{}'", command.replace('\'', "'\\''")),
+    };
+    format!("ssh {host} -t {quoted}")
 }
 
 fn resume_for(session: &Session, powershell: bool) -> String {
@@ -2064,5 +2476,16 @@ mod tests {
         assert_eq!(resume_for(&session, false), r"cd '/Users/me/it'\''s here' && claude --resume abc");
         session.cwd = r"C:\Users\me\it's here".into();
         assert_eq!(resume_for(&session, true), r"cd 'C:\Users\me\it''s here'; claude --resume abc");
+    }
+
+    #[test]
+    fn another_machines_session_resumes_over_ssh() {
+        let mut session = Session::new(Harness::ClaudeCode, "abc", "a.jsonl");
+        session.cwd = "/home/me/atlas".into();
+        let inner = resume_for(&session, false);
+        assert_eq!(
+            over_ssh("devbox", &inner, false),
+            r"ssh devbox -t 'cd '\''/home/me/atlas'\'' && claude --resume abc'"
+        );
     }
 }

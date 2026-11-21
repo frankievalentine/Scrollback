@@ -34,6 +34,10 @@ const INTERRUPTED: &str = "[Request interrupted";
 
 /// Every event of a session, in order.
 pub fn events(session: &Session) -> Result<Vec<Event>> {
+    // Another machine's session is read from what it shared.
+    if session.machine.is_some() {
+        return crate::sync::events(session);
+    }
     match session.harness {
         Harness::ClaudeCode => claude_code(session),
         Harness::Codex => codex(session),
