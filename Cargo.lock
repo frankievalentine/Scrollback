@@ -5013,7 +5013,7 @@ dependencies = [
 
 [[package]]
 name = "scrollback-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5027,7 +5027,7 @@ dependencies = [
 
 [[package]]
 name = "scrollback-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5037,7 +5037,7 @@ dependencies = [
 
 [[package]]
 name = "scrollback-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
