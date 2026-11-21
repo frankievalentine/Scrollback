@@ -215,13 +215,6 @@ impl Origin {
         Origin::ALL.into_iter().find(|o| o.slug() == slug)
     }
 
-    /// Whether the sidebar lists this source even with no sessions: the
-    /// first command-line tools Scrollback read. Others appear once they
-    /// have sessions.
-    pub fn always_listed(self) -> bool {
-        matches!(self, Origin::ClaudeCode | Origin::Codex | Origin::OpenCode | Origin::Pi)
-    }
-
     /// Whether this is an app that runs sessions, as opposed to a harness's
     /// own command-line tool.
     pub fn is_app(self) -> bool {

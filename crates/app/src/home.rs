@@ -816,16 +816,17 @@ impl Home {
                     .child("Activity"),
             );
 
-        // One row for each program sessions were run from. The first
-        // command-line harnesses are always listed; the rest are listed once
-        // they have sessions, so the list stays short as more are supported.
+        // One row for each program sessions were run from, listed once it
+        // has sessions, so the list holds only the tools actually in use.
         let mut harnesses = div().flex().flex_col().gap(px(2.)).child(div().px(px(10.)).child(label("Source", t)));
+        let mut listed = 0;
         for origin in Origin::ALL {
             let count = self.sessions.iter().filter(|s| s.origin == origin).count();
             let active = self.origin == Some(origin);
-            if !origin.always_listed() && count == 0 && !active {
+            if count == 0 && !active {
                 continue;
             }
+            listed += 1;
             harnesses = harnesses.child(
                 nav_row(t, active)
                     .id(origin.slug())
@@ -911,8 +912,8 @@ impl Home {
                             .flex()
                             .flex_col()
                             .gap(px(22.))
-                            .child(harnesses)
-                            .child(projects),
+                            // With no sessions yet, there is nothing to list.
+                            .when(listed > 0, |el| el.child(harnesses).child(projects)),
                     )
                     // In the sidebar's own margin, clear of the counts.
                     .children(ui::scrollbar(&self.sidebar_scroll, t).map(|bar| bar.right(px(-7.)))),
